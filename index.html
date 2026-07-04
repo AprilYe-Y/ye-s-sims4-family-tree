@@ -512,7 +512,7 @@
             <div class="container mx-auto px-4">
                 <div class="flex flex-col md:flex-row justify-between items-center">
                     <div class="mb-4 md:mb-0">
-                        <h3 class="text-lg font-semibold mb-2">模拟人生族谱 <span class="text-sm font-normal text-gray-400">V102.1</span></h3>
+                        <h3 class="text-lg font-semibold mb-2">模拟人生族谱 <span class="text-sm font-normal text-gray-400">V107</span></h3>
                         <p class="text-gray-400 text-sm">记录您的模拟人生家族传奇</p>
                     </div>
                     <div class="flex space-x-6">
@@ -6943,7 +6943,10 @@
 
     // 更新日志功能
     const updateLog = [
-        { version: 'V104.1', date: '2026-06-23', changes: ['优化：家族故事模块下的成员档案卡片布局，采用与任务模块相似的卡片风格', '新增：顶部通栏封面区域（h-32高度），支持显示故事图片/标签颜色/默认灰色背景', '新增：悬浮圆形头像（80x80px），一半嵌入封面、一半垂入白色内容区', '优化：姓名、出生时间横向排布在头像右侧，性别标签右对齐', '优化：标签栏单行显示，最多3个标签', '优化：故事简介最多显示2行，超出省略', '优化：底部仅保留「阅读更多」按钮', '修复：成员卡片点击无响应问题（TypeError: Cannot set properties of null）'] },
+        { version: 'V107', date: '2026-06-23', changes: ['优化：家族树拖拽'] },
+        { version: 'V106', date: '2026-06-23', changes: ['优化：成员详情'] },
+        { version: 'V105', date: '2026-06-23', changes: ['优化：图片上传功能'] },
+        { version: 'V104.1', date: '2026-06-23', changes: ['优化：家族故事模块下的成员档案卡片布局'] },
         { version: 'V103.5', date: '2026-06-22', changes: ['修复：任务编辑中的图片上传功能，添加了事件监听器和处理函数', '优化：上传的图片删除功能添加了二次确认，防止误删除', '编辑任务时可以正常上传新图片并预览'] },
         { version: 'V103.4', date: '2026-06-22', changes: ['修复：任务图片上传添加了预览功能，用户可以在上传后看到图片预览并可删除', '修复：任务卡片和任务详情中的图片显示逻辑，确保图片正确显示', '相关图片 = 任务图片，都存储在任务的images字段中'] },
         { version: 'V103.3', date: '2026-06-22', changes: ['修复：任务图片上传功能，添加了图片处理逻辑，现在任务卡片可以正确显示相关图片', '相关图片（任务图片）现在会保存在任务的images字段中'] },
