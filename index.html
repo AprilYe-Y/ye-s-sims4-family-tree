@@ -267,7 +267,7 @@
         .canvas-container {
             position: relative;
             overflow: hidden;
-            min-height: 500px;
+            height: calc(100vh - 260px);
             background: 
                 linear-gradient(90deg, rgba(37, 99, 235, 0.05) 1px, transparent 1px),
                 linear-gradient(rgba(37, 99, 235, 0.05) 1px, transparent 1px);
@@ -512,7 +512,7 @@
             <div class="container mx-auto px-4">
                 <div class="flex flex-col md:flex-row justify-between items-center">
                     <div class="mb-4 md:mb-0">
-                        <h3 class="text-lg font-semibold mb-2">模拟人生族谱 <span class="text-sm font-normal text-gray-400">V107</span></h3>
+                        <h3 class="text-lg font-semibold mb-2">模拟人生族谱 <span class="text-sm font-normal text-gray-400">V102.1</span></h3>
                         <p class="text-gray-400 text-sm">记录您的模拟人生家族传奇</p>
                     </div>
                     <div class="flex space-x-6">
@@ -1806,6 +1806,10 @@
     let branchIsDragging = false;
     let branchStartX = 0;
     let branchStartY = 0;
+    let branchInitialScale = 1;
+    let branchInitialTranslateX = 0;
+    let branchInitialTranslateY = 0;
+    let branchInitialDistance = 0;
     
     function viewMemberBranch(memberId) {
         branchCurrentMemberId = memberId;
@@ -1958,16 +1962,9 @@
         
         container.innerHTML = html;
         
-        // 重置缩放和位置
-        branchCurrentScale = 1;
-        branchTranslateX = 0;
-        branchTranslateY = 0;
-        updateBranchTransform();
-        
-        // 居中显示当前成员
-        setTimeout(() => {
-            branchCenterMember();
-        }, 100);
+        requestAnimationFrame(() => {
+            fitBranchToScreen();
+        });
     }
     
     function getAncestors(memberId) {
@@ -2275,7 +2272,7 @@
         const canvasContainer = document.getElementById('memberBranchContainer').parentElement;
         const centerX = canvasContainer.clientWidth / 2;
         const centerY = canvasContainer.clientHeight / 2;
-        const newScale = Math.min(3, branchCurrentScale + 0.1);
+        const newScale = Math.min(3, branchCurrentScale * 1.1);
         if (newScale !== branchCurrentScale) {
             const newTranslateX = centerX - (centerX - branchTranslateX) * newScale / branchCurrentScale;
             const newTranslateY = centerY - (centerY - branchTranslateY) * newScale / branchCurrentScale;
@@ -2290,7 +2287,7 @@
         const canvasContainer = document.getElementById('memberBranchContainer').parentElement;
         const centerX = canvasContainer.clientWidth / 2;
         const centerY = canvasContainer.clientHeight / 2;
-        const newScale = Math.max(0.1, branchCurrentScale - 0.1);
+        const newScale = Math.max(0.1, branchCurrentScale * 0.9);
         if (newScale !== branchCurrentScale) {
             const newTranslateX = centerX - (centerX - branchTranslateX) * newScale / branchCurrentScale;
             const newTranslateY = centerY - (centerY - branchTranslateY) * newScale / branchCurrentScale;
@@ -2302,15 +2299,57 @@
     }
     
     function branchZoomReset() {
-        branchCurrentScale = 1;
-        branchTranslateX = 0;
-        branchTranslateY = 0;
-        updateBranchTransform();
+        fitBranchToScreenFull();
         
-        // 重置滚动位置
         const container = document.getElementById('memberBranchContainer').parentElement;
         container.scrollTop = 0;
         container.scrollLeft = 0;
+    }
+
+    function fitBranchToScreen() {
+        const memberBranchContainer = document.getElementById('memberBranchContainer');
+        const canvasContainer = memberBranchContainer.parentElement;
+        
+        if (!memberBranchContainer || !canvasContainer) return;
+        
+        const contentWidth = memberBranchContainer.scrollWidth;
+        const contentHeight = memberBranchContainer.scrollHeight;
+        const containerWidth = canvasContainer.clientWidth;
+        const containerHeight = canvasContainer.clientHeight;
+        
+        if (contentHeight === 0) return;
+        
+        const fitScale = (containerHeight / contentHeight) * 0.95;
+        
+        branchCurrentScale = Math.max(0.1, Math.min(3, fitScale));
+        branchTranslateX = (containerWidth - contentWidth * branchCurrentScale) / 2;
+        branchTranslateY = (containerHeight - contentHeight * branchCurrentScale) / 2;
+        
+        updateBranchTransform();
+    }
+
+    function fitBranchToScreenFull() {
+        const memberBranchContainer = document.getElementById('memberBranchContainer');
+        const canvasContainer = memberBranchContainer.parentElement;
+        
+        if (!memberBranchContainer || !canvasContainer) return;
+        
+        const contentWidth = memberBranchContainer.scrollWidth;
+        const contentHeight = memberBranchContainer.scrollHeight;
+        const containerWidth = canvasContainer.clientWidth;
+        const containerHeight = canvasContainer.clientHeight;
+        
+        if (contentWidth === 0 || contentHeight === 0) return;
+        
+        const scaleX = containerWidth / contentWidth;
+        const scaleY = containerHeight / contentHeight;
+        const fitScale = Math.min(scaleX, scaleY) * 0.95;
+        
+        branchCurrentScale = Math.max(0.1, Math.min(3, fitScale));
+        branchTranslateX = (containerWidth - contentWidth * branchCurrentScale) / 2;
+        branchTranslateY = (containerHeight - contentHeight * branchCurrentScale) / 2;
+        
+        updateBranchTransform();
     }
     
     function branchCenterMember() {
@@ -2366,6 +2405,16 @@
             branchIsDragging = true;
             branchStartX = e.touches[0].clientX - branchTranslateX;
             branchStartY = e.touches[0].clientY - branchTranslateY;
+        } else if (e.touches.length === 2) {
+            e.preventDefault();
+            branchIsDragging = false;
+            
+            const dx = e.touches[0].clientX - e.touches[1].clientX;
+            const dy = e.touches[0].clientY - e.touches[1].clientY;
+            branchInitialDistance = Math.sqrt(dx * dx + dy * dy);
+            branchInitialScale = branchCurrentScale;
+            branchInitialTranslateX = branchTranslateX;
+            branchInitialTranslateY = branchTranslateY;
         }
     }
     
@@ -2375,19 +2424,62 @@
             branchTranslateX = e.touches[0].clientX - branchStartX;
             branchTranslateY = e.touches[0].clientY - branchStartY;
             updateBranchTransform();
+        } else if (e.touches.length === 2) {
+            e.preventDefault();
+            
+            const canvasContainer = document.getElementById('memberBranchContainer').parentElement;
+            const rect = canvasContainer.getBoundingClientRect();
+            
+            const dx = e.touches[0].clientX - e.touches[1].clientX;
+            const dy = e.touches[0].clientY - e.touches[1].clientY;
+            const distance = Math.sqrt(dx * dx + dy * dy);
+            
+            if (branchInitialDistance > 0) {
+                const scaleFactor = distance / branchInitialDistance;
+                const newScale = Math.max(0.1, Math.min(3, branchInitialScale * scaleFactor));
+                
+                if (newScale !== branchCurrentScale) {
+                    const centerX = (e.touches[0].clientX + e.touches[1].clientX) / 2 - rect.left;
+                    const centerY = (e.touches[0].clientY + e.touches[1].clientY) / 2 - rect.top;
+                    
+                    const newTranslateX = centerX - (centerX - branchInitialTranslateX) * newScale / branchInitialScale;
+                    const newTranslateY = centerY - (centerY - branchInitialTranslateY) * newScale / branchInitialScale;
+                    
+                    branchCurrentScale = newScale;
+                    branchTranslateX = newTranslateX;
+                    branchTranslateY = newTranslateY;
+                    updateBranchTransform();
+                }
+            }
         }
     }
     
     function handleBranchTouchEnd() {
         branchIsDragging = false;
+        branchInitialDistance = 0;
     }
 
     // 滚轮缩放事件处理函数
     function handleBranchWheelZoom(e) {
         e.preventDefault();
-        const delta = e.deltaY > 0 ? -0.1 : 0.1;
-        branchCurrentScale = Math.max(0.1, Math.min(3, branchCurrentScale + delta));
-        updateBranchTransform();
+        
+        const canvasContainer = document.getElementById('memberBranchContainer').parentElement;
+        const rect = canvasContainer.getBoundingClientRect();
+        const mouseX = e.clientX - rect.left;
+        const mouseY = e.clientY - rect.top;
+        
+        const scaleFactor = e.deltaY > 0 ? 0.9 : 1.1;
+        const newScale = Math.max(0.1, Math.min(3, branchCurrentScale * scaleFactor));
+        
+        if (newScale !== branchCurrentScale) {
+            const newTranslateX = mouseX - (mouseX - branchTranslateX) * newScale / branchCurrentScale;
+            const newTranslateY = mouseY - (mouseY - branchTranslateY) * newScale / branchCurrentScale;
+            
+            branchCurrentScale = newScale;
+            branchTranslateX = newTranslateX;
+            branchTranslateY = newTranslateY;
+            updateBranchTransform();
+        }
     }
 
     // Settings modal toggle function
@@ -3671,6 +3763,8 @@
         
         console.log('Family tree rendered successfully');
         console.log('Root members:', rootMembers);
+        
+        requestAnimationFrame(fitToScreen);
     }
     
     // Toggle branch collapse state
@@ -6417,6 +6511,54 @@
         document.getElementById('zoomLevel').textContent = `${Math.round(currentScale * 100)}%`;
     }
 
+    // Fit family tree to screen (height only)
+    function fitToScreen() {
+        const familyTreeContainer = document.getElementById('familyTreeContainer');
+        const canvasContainer = familyTreeContainer.parentElement;
+        
+        if (!familyTreeContainer || !canvasContainer) return;
+        
+        const contentWidth = familyTreeContainer.scrollWidth;
+        const contentHeight = familyTreeContainer.scrollHeight;
+        const containerWidth = canvasContainer.clientWidth;
+        const containerHeight = canvasContainer.clientHeight;
+        
+        if (contentHeight === 0) return;
+        
+        const fitScale = (containerHeight / contentHeight) * 0.95;
+        
+        currentScale = Math.max(0.1, Math.min(3, fitScale));
+        translateX = (containerWidth - contentWidth * currentScale) / 2;
+        translateY = (containerHeight - contentHeight * currentScale) / 2;
+        
+        updateTransform();
+    }
+
+    // Fit family tree to screen (full view - both width and height)
+    function fitToScreenFull() {
+        const familyTreeContainer = document.getElementById('familyTreeContainer');
+        const canvasContainer = familyTreeContainer.parentElement;
+        
+        if (!familyTreeContainer || !canvasContainer) return;
+        
+        const contentWidth = familyTreeContainer.scrollWidth;
+        const contentHeight = familyTreeContainer.scrollHeight;
+        const containerWidth = canvasContainer.clientWidth;
+        const containerHeight = canvasContainer.clientHeight;
+        
+        if (contentWidth === 0 || contentHeight === 0) return;
+        
+        const scaleX = containerWidth / contentWidth;
+        const scaleY = containerHeight / contentHeight;
+        const fitScale = Math.min(scaleX, scaleY) * 0.9;
+        
+        currentScale = Math.max(0.1, Math.min(3, fitScale));
+        translateX = (containerWidth - contentWidth * currentScale) / 2;
+        translateY = (containerHeight - contentHeight * currentScale) / 2;
+        
+        updateTransform();
+    }
+
     // Zoom functions
     function zoomIn() {
         const canvasContainer = document.getElementById('familyTreeContainer').parentElement;
@@ -6449,12 +6591,8 @@
     }
 
     function zoomReset() {
-        currentScale = 1;
-        translateX = 0;
-        translateY = 0;
-        updateTransform();
+        fitToScreenFull();
         
-        // Reset scroll position
         const container = document.getElementById('familyTreeContainer').parentElement;
         container.scrollTop = 0;
         container.scrollLeft = 0;
@@ -6943,10 +7081,7 @@
 
     // 更新日志功能
     const updateLog = [
-        { version: 'V107', date: '2026-06-23', changes: ['优化：家族树拖拽'] },
-        { version: 'V106', date: '2026-06-23', changes: ['优化：成员详情'] },
-        { version: 'V105', date: '2026-06-23', changes: ['优化：图片上传功能'] },
-        { version: 'V104.1', date: '2026-06-23', changes: ['优化：家族故事模块下的成员档案卡片布局'] },
+        { version: 'V104.1', date: '2026-06-23', changes: ['优化：家族故事模块下的成员档案卡片布局，采用与任务模块相似的卡片风格', '新增：顶部通栏封面区域（h-32高度），支持显示故事图片/标签颜色/默认灰色背景', '新增：悬浮圆形头像（80x80px），一半嵌入封面、一半垂入白色内容区', '优化：姓名、出生时间横向排布在头像右侧，性别标签右对齐', '优化：标签栏单行显示，最多3个标签', '优化：故事简介最多显示2行，超出省略', '优化：底部仅保留「阅读更多」按钮', '修复：成员卡片点击无响应问题（TypeError: Cannot set properties of null）'] },
         { version: 'V103.5', date: '2026-06-22', changes: ['修复：任务编辑中的图片上传功能，添加了事件监听器和处理函数', '优化：上传的图片删除功能添加了二次确认，防止误删除', '编辑任务时可以正常上传新图片并预览'] },
         { version: 'V103.4', date: '2026-06-22', changes: ['修复：任务图片上传添加了预览功能，用户可以在上传后看到图片预览并可删除', '修复：任务卡片和任务详情中的图片显示逻辑，确保图片正确显示', '相关图片 = 任务图片，都存储在任务的images字段中'] },
         { version: 'V103.3', date: '2026-06-22', changes: ['修复：任务图片上传功能，添加了图片处理逻辑，现在任务卡片可以正确显示相关图片', '相关图片（任务图片）现在会保存在任务的images字段中'] },
