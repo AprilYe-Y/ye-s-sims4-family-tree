@@ -266,12 +266,14 @@
         
         .canvas-container {
             position: relative;
-            overflow: auto;
+            overflow: hidden;
             min-height: 500px;
             background: 
                 linear-gradient(90deg, rgba(37, 99, 235, 0.05) 1px, transparent 1px),
                 linear-gradient(rgba(37, 99, 235, 0.05) 1px, transparent 1px);
             background-size: 20px 20px;
+            touch-action: none;
+            -webkit-overflow-scrolling: touch;
         }
         
         /* Family tree layout improvements */
@@ -361,7 +363,7 @@
                         </button>
                     </div>
                 </div>
-                <div class="canvas-container scrollbar-hidden relative" style="overflow: auto;">
+                <div class="canvas-container scrollbar-hidden relative">
                     <div id="familyTreeContainer" class="min-w-max p-8 cursor-move" style="transform: scale(1); transform-origin: top left;">
                         <div id="familyTree" class="flex flex-col items-center">
                             <!-- Family tree will be generated here -->
@@ -376,22 +378,22 @@
                     </div>
                     
                     <!-- Zoom controls -->
-                    <div class="absolute bottom-4 right-4 bg-white rounded-lg shadow-lg p-2 flex items-center space-x-2 z-10">
-                        <button onclick="zoomOut()" class="w-8 h-8 flex items-center justify-center bg-gray-100 hover:bg-gray-200 rounded-md transition-colors">
-                            <i class="fa fa-search-minus text-gray-700"></i>
+                    <div class="absolute bottom-6 right-6 bg-white rounded-xl shadow-xl p-3 flex items-center space-x-3 z-10">
+                        <button onclick="zoomOut()" class="w-12 h-12 flex items-center justify-center bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors active:scale-95" title="缩小">
+                            <i class="fa fa-search-minus text-gray-700 text-lg"></i>
                         </button>
-                        <div class="px-2 text-sm font-medium text-gray-700">
+                        <div class="px-3 text-base font-semibold text-gray-700 min-w-[60px] text-center">
                             <span id="zoomLevel">100%</span>
                         </div>
-                        <button onclick="zoomIn()" class="w-8 h-8 flex items-center justify-center bg-gray-100 hover:bg-gray-200 rounded-md transition-colors">
-                            <i class="fa fa-search-plus text-gray-700"></i>
+                        <button onclick="zoomIn()" class="w-12 h-12 flex items-center justify-center bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors active:scale-95" title="放大">
+                            <i class="fa fa-search-plus text-gray-700 text-lg"></i>
                         </button>
-                        <button onclick="zoomReset()" class="w-8 h-8 flex items-center justify-center bg-gray-100 hover:bg-gray-200 rounded-md transition-colors">
-                            <i class="fa fa-refresh text-gray-700"></i>
+                        <button onclick="zoomReset()" class="w-12 h-12 flex items-center justify-center bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors active:scale-95" title="重置">
+                            <i class="fa fa-refresh text-gray-700 text-lg"></i>
                         </button>
-                        <div class="w-px h-6 bg-gray-200"></div>
-                        <button onclick="exportFamilyTreeAsImage()" class="w-8 h-8 flex items-center justify-center bg-gray-100 hover:bg-gray-200 rounded-md transition-colors" title="导出为高清图片">
-                            <i class="fa fa-download text-gray-700"></i>
+                        <div class="w-px h-8 bg-gray-200"></div>
+                        <button onclick="exportFamilyTreeAsImage()" class="w-12 h-12 flex items-center justify-center bg-gray-100 hover:bg-gray-200 rounded-lg transition-colors active:scale-95" title="导出为高清图片">
+                            <i class="fa fa-download text-gray-700 text-lg"></i>
                         </button>
                     </div>
                     
@@ -1551,7 +1553,7 @@
                 </button>
             </div>
             <div class="flex-grow overflow-hidden">
-                <div class="canvas-container scrollbar-hidden relative" style="height: calc(100% - 40px); overflow: auto;">
+                <div class="canvas-container scrollbar-hidden relative" style="height: calc(100% - 40px);">
                     <div id="memberBranchContainer" class="min-w-max p-8 cursor-move" style="transform-origin: top left;">
                         <div id="memberBranchTree" class="flex flex-col items-center">
                             <!-- Branch tree will be generated here -->
@@ -2264,19 +2266,39 @@
     function updateBranchTransform() {
         const container = document.getElementById('memberBranchContainer');
         if (container) {
-            container.style.transform = `scale(${branchCurrentScale}) translate(${branchTranslateX / branchCurrentScale}px, ${branchTranslateY / branchCurrentScale}px)`;
+            container.style.transform = `translate(${branchTranslateX}px, ${branchTranslateY}px) scale(${branchCurrentScale})`;
             document.getElementById('branchZoomLevel').textContent = `${Math.round(branchCurrentScale * 100)}%`;
         }
     }
     
     function branchZoomIn() {
-        branchCurrentScale = Math.min(3, branchCurrentScale + 0.1);
-        updateBranchTransform();
+        const canvasContainer = document.getElementById('memberBranchContainer').parentElement;
+        const centerX = canvasContainer.clientWidth / 2;
+        const centerY = canvasContainer.clientHeight / 2;
+        const newScale = Math.min(3, branchCurrentScale + 0.1);
+        if (newScale !== branchCurrentScale) {
+            const newTranslateX = centerX - (centerX - branchTranslateX) * newScale / branchCurrentScale;
+            const newTranslateY = centerY - (centerY - branchTranslateY) * newScale / branchCurrentScale;
+            branchCurrentScale = newScale;
+            branchTranslateX = newTranslateX;
+            branchTranslateY = newTranslateY;
+            updateBranchTransform();
+        }
     }
     
     function branchZoomOut() {
-        branchCurrentScale = Math.max(0.1, branchCurrentScale - 0.1);
-        updateBranchTransform();
+        const canvasContainer = document.getElementById('memberBranchContainer').parentElement;
+        const centerX = canvasContainer.clientWidth / 2;
+        const centerY = canvasContainer.clientHeight / 2;
+        const newScale = Math.max(0.1, branchCurrentScale - 0.1);
+        if (newScale !== branchCurrentScale) {
+            const newTranslateX = centerX - (centerX - branchTranslateX) * newScale / branchCurrentScale;
+            const newTranslateY = centerY - (centerY - branchTranslateY) * newScale / branchCurrentScale;
+            branchCurrentScale = newScale;
+            branchTranslateX = newTranslateX;
+            branchTranslateY = newTranslateY;
+            updateBranchTransform();
+        }
     }
     
     function branchZoomReset() {
@@ -6134,8 +6156,8 @@
         document.addEventListener('mouseup', endDrag);
 
         // Touch events for mobile
-        container.addEventListener('touchstart', handleTouchStart);
-        container.addEventListener('touchmove', handleTouchMove);
+        container.addEventListener('touchstart', handleTouchStart, { passive: false });
+        container.addEventListener('touchmove', handleTouchMove, { passive: false });
         container.addEventListener('touchend', handleTouchEnd);
 
         // Keyboard navigation
@@ -6149,11 +6171,21 @@
     function handleWheelZoom(e) {
         e.preventDefault();
         
-        const delta = e.deltaY > 0 ? -0.1 : 0.1;
-        const newScale = Math.max(0.1, Math.min(3, currentScale + delta));
+        const canvasContainer = document.getElementById('familyTreeContainer').parentElement;
+        const rect = canvasContainer.getBoundingClientRect();
+        const mouseX = e.clientX - rect.left;
+        const mouseY = e.clientY - rect.top;
+        
+        const scaleFactor = e.deltaY > 0 ? 0.9 : 1.1;
+        const newScale = Math.max(0.1, Math.min(3, currentScale * scaleFactor));
         
         if (newScale !== currentScale) {
+            const newTranslateX = mouseX - (mouseX - translateX) * newScale / currentScale;
+            const newTranslateY = mouseY - (mouseY - translateY) * newScale / currentScale;
+            
             currentScale = newScale;
+            translateX = newTranslateX;
+            translateY = newTranslateY;
             updateTransform();
         }
     }
@@ -6184,18 +6216,38 @@
 
     // Touch events
     let initialDistance = 0;
+    let initialScale = 1;
+    let initialTranslateX = 0;
+    let initialTranslateY = 0;
     let touchStartX, touchStartY;
+    let lastTouchTime = 0;
+    let lastTouchX = 0;
+    let lastTouchY = 0;
+    let velocityX = 0;
+    let velocityY = 0;
+    let inertiaAnimation = null;
 
     function handleTouchStart(e) {
+        if (inertiaAnimation) {
+            cancelAnimationFrame(inertiaAnimation);
+            inertiaAnimation = null;
+        }
+        
         if (e.touches.length === 1) {
-            // Single touch for dragging
             touchStartX = e.touches[0].clientX - translateX;
             touchStartY = e.touches[0].clientY - translateY;
+            lastTouchTime = Date.now();
+            lastTouchX = e.touches[0].clientX;
+            lastTouchY = e.touches[0].clientY;
+            velocityX = 0;
+            velocityY = 0;
         } else if (e.touches.length === 2) {
-            // Double touch for zooming
             const dx = e.touches[0].clientX - e.touches[1].clientX;
             const dy = e.touches[0].clientY - e.touches[1].clientY;
             initialDistance = Math.sqrt(dx * dx + dy * dy);
+            initialScale = currentScale;
+            initialTranslateX = translateX;
+            initialTranslateY = translateY;
         }
     }
 
@@ -6203,30 +6255,101 @@
         e.preventDefault();
         
         if (e.touches.length === 1 && !initialDistance) {
-            // Single touch drag
-            translateX = e.touches[0].clientX - touchStartX;
-            translateY = e.touches[0].clientY - touchStartY;
+            const currentX = e.touches[0].clientX;
+            const currentY = e.touches[0].clientY;
+            const currentTime = Date.now();
+            const deltaTime = currentTime - lastTouchTime;
+            
+            if (deltaTime > 0) {
+                velocityX = (currentX - lastTouchX) / deltaTime;
+                velocityY = (currentY - lastTouchY) / deltaTime;
+            }
+            
+            lastTouchTime = currentTime;
+            lastTouchX = currentX;
+            lastTouchY = currentY;
+            
+            translateX = currentX - touchStartX;
+            translateY = currentY - touchStartY;
             updateTransform();
         } else if (e.touches.length === 2) {
-            // Pinch to zoom
+            const canvasContainer = document.getElementById('familyTreeContainer').parentElement;
+            const rect = canvasContainer.getBoundingClientRect();
+            
             const dx = e.touches[0].clientX - e.touches[1].clientX;
             const dy = e.touches[0].clientY - e.touches[1].clientY;
             const distance = Math.sqrt(dx * dx + dy * dy);
             
             if (initialDistance > 0) {
                 const scaleFactor = distance / initialDistance;
-                const newScale = Math.max(0.1, Math.min(3, currentScale * scaleFactor));
+                const newScale = Math.max(0.1, Math.min(3, initialScale * scaleFactor));
                 
                 if (newScale !== currentScale) {
+                    const centerX = (e.touches[0].clientX + e.touches[1].clientX) / 2 - rect.left;
+                    const centerY = (e.touches[0].clientY + e.touches[1].clientY) / 2 - rect.top;
+                    
+                    const newTranslateX = centerX - (centerX - initialTranslateX) * newScale / initialScale;
+                    const newTranslateY = centerY - (centerY - initialTranslateY) * newScale / initialScale;
+                    
                     currentScale = newScale;
+                    translateX = newTranslateX;
+                    translateY = newTranslateY;
                     updateTransform();
                 }
             }
+        } else if (e.touches.length === 1 && initialDistance > 0) {
+            initialDistance = 0;
+            touchStartX = e.touches[0].clientX - translateX;
+            touchStartY = e.touches[0].clientY - translateY;
+            lastTouchTime = Date.now();
+            lastTouchX = e.touches[0].clientX;
+            lastTouchY = e.touches[0].clientY;
+            velocityX = 0;
+            velocityY = 0;
         }
     }
 
-    function handleTouchEnd() {
-        initialDistance = 0;
+    function handleTouchEnd(e) {
+        if (e.touches.length === 0) {
+            initialDistance = 0;
+            
+            const speed = Math.sqrt(velocityX * velocityX + velocityY * velocityY);
+            if (speed > 0.1) {
+                startInertia();
+            }
+        } else if (e.touches.length === 1) {
+            initialDistance = 0;
+            touchStartX = e.touches[0].clientX - translateX;
+            touchStartY = e.touches[0].clientY - translateY;
+            lastTouchTime = Date.now();
+            lastTouchX = e.touches[0].clientX;
+            lastTouchY = e.touches[0].clientY;
+            velocityX = 0;
+            velocityY = 0;
+        }
+    }
+
+    function startInertia() {
+        const friction = 0.95;
+        const minSpeed = 0.1;
+        
+        function animate() {
+            velocityX *= friction;
+            velocityY *= friction;
+            
+            const speed = Math.sqrt(velocityX * velocityX + velocityY * velocityY);
+            
+            if (speed > minSpeed) {
+                translateX += velocityX * 16;
+                translateY += velocityY * 16;
+                updateTransform();
+                inertiaAnimation = requestAnimationFrame(animate);
+            } else {
+                inertiaAnimation = null;
+            }
+        }
+        
+        inertiaAnimation = requestAnimationFrame(animate);
     }
 
     // Keyboard navigation
@@ -6288,7 +6411,7 @@
     // Update transform
     function updateTransform() {
         const container = document.getElementById('familyTreeContainer');
-        container.style.transform = `scale(${currentScale}) translate(${translateX / currentScale}px, ${translateY / currentScale}px)`;
+        container.style.transform = `translate(${translateX}px, ${translateY}px) scale(${currentScale})`;
         
         // Update zoom level display
         document.getElementById('zoomLevel').textContent = `${Math.round(currentScale * 100)}%`;
@@ -6296,17 +6419,31 @@
 
     // Zoom functions
     function zoomIn() {
+        const canvasContainer = document.getElementById('familyTreeContainer').parentElement;
+        const centerX = canvasContainer.clientWidth / 2;
+        const centerY = canvasContainer.clientHeight / 2;
         const newScale = Math.min(3, currentScale + 0.1);
         if (newScale !== currentScale) {
+            const newTranslateX = centerX - (centerX - translateX) * newScale / currentScale;
+            const newTranslateY = centerY - (centerY - translateY) * newScale / currentScale;
             currentScale = newScale;
+            translateX = newTranslateX;
+            translateY = newTranslateY;
             updateTransform();
         }
     }
 
     function zoomOut() {
+        const canvasContainer = document.getElementById('familyTreeContainer').parentElement;
+        const centerX = canvasContainer.clientWidth / 2;
+        const centerY = canvasContainer.clientHeight / 2;
         const newScale = Math.max(0.1, currentScale - 0.1);
         if (newScale !== currentScale) {
+            const newTranslateX = centerX - (centerX - translateX) * newScale / currentScale;
+            const newTranslateY = centerY - (centerY - translateY) * newScale / currentScale;
             currentScale = newScale;
+            translateX = newTranslateX;
+            translateY = newTranslateY;
             updateTransform();
         }
     }
@@ -6345,8 +6482,7 @@
             currentScale = 1;
             translateX = 0;
             translateY = 0;
-            container.style.transform = 'scale(1)';
-            container.style.transformOrigin = 'top left';
+            updateTransform();
             
             // Wait for layout to settle
             await new Promise(resolve => setTimeout(resolve, 200));
@@ -6383,8 +6519,7 @@
                 currentScale = savedScale;
                 translateX = savedTranslateX;
                 translateY = savedTranslateY;
-                container.style.transform = `scale(${savedScale}) translate(${savedTranslateX}px, ${savedTranslateY}px)`;
-                container.style.transformOrigin = 'top left';
+                updateTransform();
                 
                 // Download the image
                 const link = document.createElement('a');
@@ -6430,8 +6565,7 @@
                 currentScale = savedScale;
                 translateX = savedTranslateX;
                 translateY = savedTranslateY;
-                container.style.transform = `scale(${savedScale}) translate(${savedTranslateX}px, ${savedTranslateY}px)`;
-                container.style.transformOrigin = 'top left';
+                updateTransform();
                 
                 // Download the canvas
                 const link = document.createElement('a');
@@ -6454,7 +6588,7 @@
                 currentScale = savedScale;
                 translateX = savedTranslateX;
                 translateY = savedTranslateY;
-                container.style.transform = `scale(${savedScale}) translate(${savedTranslateX}px, ${savedTranslateY}px)`;
+                updateTransform();
                 
                 showNotification('缺少导出库，请刷新页面重试', 'error');
             }
@@ -6468,7 +6602,7 @@
                 scrollIndicators.style.display = originalIndicatorDisplay;
             }
             
-            container.style.transform = `scale(${currentScale}) translate(${translateX}px, ${translateY}px)`;
+            updateTransform();
             showNotification('导出失败，请重试', 'error');
         }
     }
