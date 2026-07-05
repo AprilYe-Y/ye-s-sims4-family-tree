@@ -1814,6 +1814,9 @@
 <script>
     // Global variables
     let familyData = [];
+    let backupFamilyData = [];
+    let backupTasks = [];
+    let backupActivities = [];
     let selectedMember = null;
     let zoomLevel = 1;
     let storyImagesToUpload = [];
@@ -2988,38 +2991,49 @@
     // Load family data (supports both IndexedDB and localStorage)
     async function loadFamilyData() {
         try {
+            let loadedData = [];
+            
             if (storageMode === 'indexedDB' && db) {
-                // Load from IndexedDB
-                familyData = await loadFromIndexedDB();
+                loadedData = await loadFromIndexedDB();
             } else {
-                // Load from localStorage
                 const savedData = localStorage.getItem('simsFamilyTree');
                 if (savedData) {
-                    familyData = JSON.parse(savedData);
-                } else {
-                    // Set empty family data (no preset families)
-                    familyData = [];
-                    await saveFamilyData();
+                    loadedData = JSON.parse(savedData);
                 }
             }
             
-            // 数据迁移：确保所有成员都有 spouseRelationships 数组
+            if (!Array.isArray(loadedData)) {
+                loadedData = [];
+            }
+            
+            if (loadedData.length === 0 && backupFamilyData.length > 0) {
+                console.warn('存储数据为空，但存在内存备份，正在恢复...');
+                familyData = JSON.parse(JSON.stringify(backupFamilyData));
+                await saveFamilyData();
+                showNotification('数据从内存备份中恢复', 'success');
+            } else {
+                familyData = loadedData;
+                backupFamilyData = JSON.parse(JSON.stringify(familyData));
+            }
+            
+            if (familyData.length === 0) {
+                await saveFamilyData();
+            }
+            
             familyData.forEach(member => {
                 if (!member.spouseRelationships) {
                     member.spouseRelationships = [];
                 }
                 
-                // 兼容旧数据：将 spouse 数组迁移到 spouseRelationships
                 if (member.spouses && member.spouses.length > 0 && member.spouseRelationships.length === 0) {
                     member.spouses.forEach(spouseId => {
                         member.spouseRelationships.push({
                             spouseId: spouseId,
-                            type: 'spouse' // 默认类型为配偶
+                            type: 'spouse'
                         });
                     });
                 }
                 
-                // 数据迁移：确保所有成员都有 tags 数组
                 if (!member.tags) {
                     member.tags = [];
                 }
@@ -3037,12 +3051,12 @@
     // Save family data (supports both IndexedDB and localStorage)
     async function saveFamilyData() {
         try {
+            backupFamilyData = JSON.parse(JSON.stringify(familyData));
+            
             if (storageMode === 'indexedDB' && db) {
-                // Save to IndexedDB
                 await saveToIndexedDB();
                 console.log('数据已保存到 IndexedDB');
             } else {
-                // Save to localStorage with compression
                 const compressedData = JSON.stringify(familyData);
                 const dataSize = new Blob([compressedData]).size;
                 console.log(`数据大小: ${(dataSize / 1024).toFixed(2)} KB`);
@@ -3050,16 +3064,20 @@
                 localStorage.setItem('simsFamilyTree', compressedData);
                 console.log('数据已保存到本地存储');
                 
-                // Show warning if data is large
-                if (dataSize > 2 * 1024 * 1024) { // 超过2MB
+                if (dataSize > 2 * 1024 * 1024) {
                     showStorageWarning(dataSize);
                 }
             }
             
-            // Update tag filter options
             populateTagFilterOptions();
         } catch (error) {
             console.error('保存数据时出错:', error);
+            
+            if (backupFamilyData.length > 0) {
+                familyData = JSON.parse(JSON.stringify(backupFamilyData));
+                renderFamilyTree();
+            }
+            
             if (error.name === 'QuotaExceededError') {
                 showStorageError();
             } else {
@@ -3070,33 +3088,14 @@
     
     // Load data from IndexedDB
     async function loadFromIndexedDB() {
-        return new Promise((resolve, reject) => {
+        const members = await new Promise((resolve, reject) => {
             try {
                 const transaction = db.transaction(['members'], 'readonly');
                 const store = transaction.objectStore('members');
                 const request = store.getAll();
                 
-                request.onsuccess = async (event) => {
-                    const members = event.target.result;
-                    
-                    // Load images for each member
-                    for (const member of members) {
-                        if (member.avatarId) {
-                            member.image = await loadImageFromIndexedDB(member.avatarId);
-                        }
-                        
-                        if (member.storyImageIds && member.storyImageIds.length > 0) {
-                            member.storyImages = [];
-                            for (const imageId of member.storyImageIds) {
-                                const imageData = await loadImageFromIndexedDB(imageId);
-                                if (imageData) {
-                                    member.storyImages.push(imageData);
-                                }
-                            }
-                        }
-                    }
-                    
-                    resolve(members.length > 0 ? members : []);
+                request.onsuccess = (event) => {
+                    resolve(event.target.result || []);
                 };
                 
                 request.onerror = (event) => {
@@ -3108,6 +3107,24 @@
                 reject(error);
             }
         });
+        
+        for (const member of members) {
+            if (member.avatarId) {
+                member.image = await loadImageFromIndexedDB(member.avatarId);
+            }
+            
+            if (member.storyImageIds && member.storyImageIds.length > 0) {
+                member.storyImages = [];
+                for (const imageId of member.storyImageIds) {
+                    const imageData = await loadImageFromIndexedDB(imageId);
+                    if (imageData) {
+                        member.storyImages.push(imageData);
+                    }
+                }
+            }
+        }
+        
+        return members.length > 0 ? members : [];
     }
     
     // Delete member from IndexedDB
@@ -3154,14 +3171,66 @@
 
     // Save data to IndexedDB
     async function saveToIndexedDB() {
-        return new Promise((resolve, reject) => {
-            try {
+        try {
+            const imageConversionPromises = [];
+            const memberDataList = [];
+            
+            for (const member of familyData) {
+                const memberCopy = { ...member };
+                let avatarId = member.avatarId;
+                let storyImageIds = member.storyImageIds || [];
+                
+                if (member.image && member.image.startsWith('data:image')) {
+                    avatarId = `avatar_${member.id}_${Date.now()}`;
+                    memberCopy.avatarId = avatarId;
+                    memberCopy.image = null;
+                    
+                    imageConversionPromises.push(
+                        dataURLToBlob(member.image).then(blob => ({
+                            id: avatarId,
+                            memberId: member.id,
+                            type: 'avatar',
+                            data: blob,
+                            uploadedAt: Date.now()
+                        }))
+                    );
+                }
+                
+                if (member.storyImages && member.storyImages.length > 0) {
+                    storyImageIds = [];
+                    for (let i = 0; i < member.storyImages.length; i++) {
+                        const imageData = member.storyImages[i];
+                        if (imageData && imageData.startsWith('data:image')) {
+                            const imageId = `story_${member.id}_${i}_${Date.now()}`;
+                            storyImageIds.push(imageId);
+                            
+                            imageConversionPromises.push(
+                                dataURLToBlob(imageData).then(blob => ({
+                                    id: imageId,
+                                    memberId: member.id,
+                                    type: 'story',
+                                    data: blob,
+                                    uploadedAt: Date.now()
+                                }))
+                            );
+                        }
+                    }
+                    memberCopy.storyImageIds = storyImageIds;
+                    memberCopy.storyImages = null;
+                }
+                
+                memberDataList.push(memberCopy);
+            }
+            
+            const imagesToSave = await Promise.all(imageConversionPromises);
+            
+            return new Promise((resolve, reject) => {
                 const transaction = db.transaction(['members', 'images'], 'readwrite');
                 const membersStore = transaction.objectStore('members');
                 const imagesStore = transaction.objectStore('images');
                 
                 let completedOperations = 0;
-                const totalOperations = familyData.length;
+                const totalOperations = memberDataList.length + imagesToSave.length;
                 
                 const checkCompletion = () => {
                     if (completedOperations >= totalOperations) {
@@ -3169,78 +3238,30 @@
                     }
                 };
                 
-                familyData.forEach(async (member) => {
-                    try {
-                        // Create a copy of the member without image data
-                        const memberCopy = { ...member };
-                        let avatarId = null;
-                        let storyImageIds = [];
-                        
-                        // Handle avatar image
-                        if (member.image && member.image.startsWith('data:image')) {
-                            avatarId = `avatar_${member.id}_${Date.now()}`;
-                            memberCopy.avatarId = avatarId;
-                            memberCopy.image = null; // Remove image data from member object
-                            
-                            // Save avatar to images store
-                            const avatarBlob = await dataURLToBlob(member.image);
-                            const avatarRequest = imagesStore.put({
-                                id: avatarId,
-                                memberId: member.id,
-                                type: 'avatar',
-                                data: avatarBlob,
-                                uploadedAt: Date.now()
-                            });
-                            
-                            avatarRequest.onsuccess = () => console.log('Avatar saved:', avatarId);
-                            avatarRequest.onerror = (e) => console.error('Error saving avatar:', e.target.error);
-                        }
-                        
-                        // Handle story images
-                        if (member.storyImages && member.storyImages.length > 0) {
-                            for (let i = 0; i < member.storyImages.length; i++) {
-                                const imageData = member.storyImages[i];
-                                if (imageData && imageData.startsWith('data:image')) {
-                                    const imageId = `story_${member.id}_${i}_${Date.now()}`;
-                                    storyImageIds.push(imageId);
-                                    
-                                    // Save story image to images store
-                                    const imageBlob = await dataURLToBlob(imageData);
-                                    const imageRequest = imagesStore.put({
-                                        id: imageId,
-                                        memberId: member.id,
-                                        type: 'story',
-                                        data: imageBlob,
-                                        uploadedAt: Date.now()
-                                    });
-                                    
-                                    imageRequest.onsuccess = () => console.log('Story image saved:', imageId);
-                                    imageRequest.onerror = (e) => console.error('Error saving story image:', e.target.error);
-                                }
-                            }
-                            memberCopy.storyImageIds = storyImageIds;
-                            memberCopy.storyImages = null; // Remove story images from member object
-                        }
-                        
-                        // Save member data
-                        const memberRequest = membersStore.put(memberCopy);
-                        
-                        memberRequest.onsuccess = () => {
-                            completedOperations++;
-                            checkCompletion();
-                        };
-                        
-                        memberRequest.onerror = (event) => {
-                            console.error('Error saving member:', event.target.error);
-                            completedOperations++;
-                            checkCompletion();
-                        };
-                        
-                    } catch (error) {
-                        console.error('Error processing member:', error);
+                imagesToSave.forEach(imageData => {
+                    const request = imagesStore.put(imageData);
+                    request.onsuccess = () => {
                         completedOperations++;
                         checkCompletion();
-                    }
+                    };
+                    request.onerror = (e) => {
+                        console.error('Error saving image:', e.target.error);
+                        completedOperations++;
+                        checkCompletion();
+                    };
+                });
+                
+                memberDataList.forEach(memberCopy => {
+                    const request = membersStore.put(memberCopy);
+                    request.onsuccess = () => {
+                        completedOperations++;
+                        checkCompletion();
+                    };
+                    request.onerror = (e) => {
+                        console.error('Error saving member:', e.target.error);
+                        completedOperations++;
+                        checkCompletion();
+                    };
                 });
                 
                 transaction.oncomplete = () => {
@@ -3251,12 +3272,11 @@
                     console.error('Transaction error:', event.target.error);
                     reject(event.target.error);
                 };
-                
-            } catch (error) {
-                console.error('Error in saveToIndexedDB:', error);
-                reject(error);
-            }
-        });
+            });
+        } catch (error) {
+            console.error('Error in saveToIndexedDB:', error);
+            throw error;
+        }
     }
     
     // Load image from IndexedDB
@@ -3731,19 +3751,15 @@
                         renderFamilyTree();
                         renderStories();
                         
-                        // 导入任务数据
-                        if (importedTasks && importedTasks.length > 0) {
-                            tasks = importedTasks;
-                            saveTasks();
-                            renderTasks();
-                        }
+                        // 导入任务数据（始终覆盖）
+                        tasks = importedTasks || [];
+                        saveTasks();
+                        renderTasks();
                         
-                        // 导入活动数据
-                        if (importedActivities && importedActivities.length > 0) {
-                            activities = importedActivities;
-                            saveActivities();
-                            renderActivities();
-                        }
+                        // 导入活动数据（始终覆盖）
+                        activities = importedActivities || [];
+                        saveActivities();
+                        renderActivities();
                         
                         // Show success notification
                         const notification = document.createElement('div');
@@ -3784,43 +3800,32 @@
         if (confirm('⚠️ 确定要重置所有数据吗？这将清除所有自定义内容并恢复默认数据。\n\n建议在重置前先导出数据备份，以便日后需要时恢复。')) {
             // Clear data from both localStorage and IndexedDB
             localStorage.removeItem('simsFamilyTree');
+            localStorage.removeItem('familyTreeTasks');
+            localStorage.removeItem('familyTreeActivities');
             
-            if (storageMode === 'indexedDB' && db) {
-                try {
-                    // Clear IndexedDB data
-                    const transaction = db.transaction(['members', 'images'], 'readwrite');
-                    const membersStore = transaction.objectStore('members');
-                    const imagesStore = transaction.objectStore('images');
-                    
-                    await Promise.all([
-                        new Promise((resolve, reject) => {
-                            const request = membersStore.clear();
-                            request.onsuccess = () => resolve();
-                            request.onerror = (e) => reject(e.target.error);
-                        }),
-                        new Promise((resolve, reject) => {
-                            const request = imagesStore.clear();
-                            request.onsuccess = () => resolve();
-                            request.onerror = (e) => reject(e.target.error);
-                        })
-                    ]);
-                    console.log('IndexedDB数据已清除');
-                } catch (error) {
-                    console.error('清除IndexedDB数据时出错:', error);
-                }
-            }
+            // Clear memory backups to prevent auto-restoration
+            backupFamilyData = [];
+            backupTasks = [];
+            backupActivities = [];
             
-            await loadFamilyData();
+            // Clear in-memory data immediately for UI update
+            familyData = [];
+            tasks = [];
+            activities = [];
+            
+            // Force re-render with empty data
             renderFamilyTree();
             renderStories();
+            renderTasks();
+            renderActivities();
             
-            // Show success notification
+            // Show success notification immediately
             const notification = document.createElement('div');
             notification.className = 'fixed top-4 right-4 z-50 px-6 py-3 bg-green-500 text-white rounded-lg shadow-lg transform transition-all duration-300';
             notification.innerHTML = `
                 <div class="flex items-center">
                     <i class="fa fa-check-circle mr-2"></i>
-                    <span>✅ 数据已重置！如需恢复之前的数据，请使用"导入数据文件"功能。</span>
+                    <span>✅ 数据已成功清除！如需恢复之前的数据，请使用"导入数据文件"功能。</span>
                 </div>
             `;
             document.body.appendChild(notification);
@@ -3833,6 +3838,48 @@
                     }
                 }, 300);
             }, 4000);
+            
+            if (storageMode === 'indexedDB' && db) {
+                try {
+                    // Clear IndexedDB data
+                    const transaction = db.transaction(['members', 'images', 'tasks', 'activities'], 'readwrite');
+                    const membersStore = transaction.objectStore('members');
+                    const imagesStore = transaction.objectStore('images');
+                    const tasksStore = transaction.objectStore('tasks');
+                    const activitiesStore = transaction.objectStore('activities');
+                    
+                    await Promise.all([
+                        new Promise((resolve, reject) => {
+                            const request = membersStore.clear();
+                            request.onsuccess = () => resolve();
+                            request.onerror = (e) => reject(e.target.error);
+                        }),
+                        new Promise((resolve, reject) => {
+                            const request = imagesStore.clear();
+                            request.onsuccess = () => resolve();
+                            request.onerror = (e) => reject(e.target.error);
+                        }),
+                        new Promise((resolve, reject) => {
+                            const request = tasksStore.clear();
+                            request.onsuccess = () => resolve();
+                            request.onerror = (e) => reject(e.target.error);
+                        }),
+                        new Promise((resolve, reject) => {
+                            const request = activitiesStore.clear();
+                            request.onsuccess = () => resolve();
+                            request.onerror = (e) => reject(e.target.error);
+                        })
+                    ]);
+                    console.log('IndexedDB数据已清除');
+                } catch (error) {
+                    console.error('清除IndexedDB数据时出错:', error);
+                }
+            }
+            
+            // Ensure data is properly loaded from storage (empty)
+            await loadFamilyData();
+            await loadTasks();
+            await loadActivities();
         }
     }
 
@@ -7563,6 +7610,8 @@
     // Save tasks to storage
     async function saveTasks() {
         try {
+            backupTasks = JSON.parse(JSON.stringify(tasks));
+            
             if (storageMode === 'indexedDB' && db) {
                 await saveTasksToIndexedDB();
             } else {
@@ -7570,6 +7619,12 @@
             }
         } catch (e) {
             console.error('Failed to save tasks:', e);
+            
+            if (backupTasks.length > 0) {
+                tasks = JSON.parse(JSON.stringify(backupTasks));
+                renderTasks();
+            }
+            
             if (e.name === 'QuotaExceededError') {
                 showNotification('存储空间不足，请删除一些任务图片', 'error');
             }
@@ -7579,6 +7634,8 @@
     // Save activities to storage
     async function saveActivities() {
         try {
+            backupActivities = JSON.parse(JSON.stringify(activities));
+            
             if (storageMode === 'indexedDB' && db) {
                 await saveActivitiesToIndexedDB();
             } else {
@@ -7586,6 +7643,12 @@
             }
         } catch (e) {
             console.error('Failed to save activities:', e);
+            
+            if (backupActivities.length > 0) {
+                activities = JSON.parse(JSON.stringify(backupActivities));
+                renderActivities();
+            }
+            
             if (e.name === 'QuotaExceededError') {
                 showNotification('存储空间不足，请删除一些活动图片', 'error');
             }
