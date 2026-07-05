@@ -2894,12 +2894,13 @@
             
             // Ensure DOM is ready before rendering
             if (document.readyState === 'loading') {
-                document.addEventListener('DOMContentLoaded', () => {
+                document.addEventListener('DOMContentLoaded', async () => {
                     renderFamilyTree();
                     renderStories();
-                    initTaskPanel(); // Initialize task panel
-                    initActivityPanel(); // Initialize activity panel
-                    updateMemberCount(); // 更新成员数量统计
+                    await initTaskPanel();
+                    await initActivityPanel();
+                    populateTagFilterOptions();
+                    updateMemberCount();
                     if (storageMode === 'indexedDB') {
                         showNotification('已启用大容量存储模式，支持添加300+成员', 'success');
                     } else {
@@ -2909,10 +2910,10 @@
             } else {
                 renderFamilyTree();
                 renderStories();
-                initTaskPanel(); // Initialize task panel
-                initActivityPanel(); // Initialize activity panel
+                await initTaskPanel();
+                await initActivityPanel();
                 populateTagFilterOptions();
-                updateMemberCount(); // 更新成员数量统计
+                updateMemberCount();
                 if (storageMode === 'indexedDB') {
                     showNotification('已启用大容量存储模式，支持添加300+成员', 'success');
                 } else {
@@ -2938,7 +2939,7 @@
     // Initialize IndexedDB
     function initIndexedDB() {
         return new Promise((resolve, reject) => {
-            const request = indexedDB.open('SimsFamilyDB', 1);
+            const request = indexedDB.open('SimsFamilyDB', 2);
             
             request.onerror = (event) => {
                 console.error('IndexedDB initialization error:', event.target.error);
@@ -2954,7 +2955,6 @@
             request.onupgradeneeded = (event) => {
                 const db = event.target.result;
                 
-                // Create members store
                 if (!db.objectStoreNames.contains('members')) {
                     const membersStore = db.createObjectStore('members', { keyPath: 'id' });
                     membersStore.createIndex('name', 'name', { unique: false });
@@ -2962,11 +2962,22 @@
                     membersStore.createIndex('birthDate', 'birthDate', { unique: false });
                 }
                 
-                // Create images store for binary image data
                 if (!db.objectStoreNames.contains('images')) {
                     const imagesStore = db.createObjectStore('images', { keyPath: 'id' });
                     imagesStore.createIndex('memberId', 'memberId', { unique: false });
-                    imagesStore.createIndex('type', 'type', { unique: false }); // 'avatar' or 'story'
+                    imagesStore.createIndex('type', 'type', { unique: false });
+                }
+                
+                if (!db.objectStoreNames.contains('tasks')) {
+                    const tasksStore = db.createObjectStore('tasks', { keyPath: 'id' });
+                    tasksStore.createIndex('name', 'name', { unique: false });
+                    tasksStore.createIndex('createdAt', 'createdAt', { unique: false });
+                }
+                
+                if (!db.objectStoreNames.contains('activities')) {
+                    const activitiesStore = db.createObjectStore('activities', { keyPath: 'id' });
+                    activitiesStore.createIndex('name', 'name', { unique: false });
+                    activitiesStore.createIndex('createdAt', 'createdAt', { unique: false });
                 }
                 
                 console.log('IndexedDB schema created/updated');
@@ -7453,14 +7464,18 @@
 
     // ==================== Task Panel Functions ====================
     
-    // Load tasks from localStorage
-    function loadTasks() {
+    // Load tasks from storage
+    async function loadTasks() {
         try {
-            const saved = localStorage.getItem('familyTreeTasks');
-            if (saved) {
-                tasks = JSON.parse(saved);
+            if (storageMode === 'indexedDB' && db) {
+                tasks = await loadTasksFromIndexedDB();
             } else {
-                tasks = [];
+                const saved = localStorage.getItem('familyTreeTasks');
+                if (saved) {
+                    tasks = JSON.parse(saved);
+                } else {
+                    tasks = [];
+                }
             }
         } catch (e) {
             console.error('Failed to load tasks:', e);
@@ -7468,14 +7483,51 @@
         }
     }
     
-    // Load activities from localStorage
-    function loadActivities() {
+    // Load tasks from IndexedDB
+    function loadTasksFromIndexedDB() {
+        return new Promise((resolve, reject) => {
+            try {
+                const transaction = db.transaction(['tasks'], 'readonly');
+                const store = transaction.objectStore('tasks');
+                const request = store.getAll();
+                
+                request.onsuccess = (event) => {
+                    const loadedTasks = event.target.result || [];
+                    loadedTasks.sort((a, b) => {
+                        if (a.pinned && !b.pinned) return -1;
+                        if (!a.pinned && b.pinned) return 1;
+                        const aCompleted = isTaskCompleted(a);
+                        const bCompleted = isTaskCompleted(b);
+                        if (aCompleted && !bCompleted) return 1;
+                        if (!aCompleted && bCompleted) return -1;
+                        return (b.createdAt || 0) - (a.createdAt || 0);
+                    });
+                    resolve(loadedTasks);
+                };
+                
+                request.onerror = (event) => {
+                    console.error('Error loading tasks from IndexedDB:', event.target.error);
+                    reject(event.target.error);
+                };
+            } catch (error) {
+                console.error('Error in loadTasksFromIndexedDB:', error);
+                reject(error);
+            }
+        });
+    }
+    
+    // Load activities from storage
+    async function loadActivities() {
         try {
-            const saved = localStorage.getItem('familyTreeActivities');
-            if (saved) {
-                activities = JSON.parse(saved);
+            if (storageMode === 'indexedDB' && db) {
+                activities = await loadActivitiesFromIndexedDB();
             } else {
-                activities = [];
+                const saved = localStorage.getItem('familyTreeActivities');
+                if (saved) {
+                    activities = JSON.parse(saved);
+                } else {
+                    activities = [];
+                }
             }
         } catch (e) {
             console.error('Failed to load activities:', e);
@@ -7483,22 +7535,169 @@
         }
     }
     
-    // Save tasks to localStorage
-    function saveTasks() {
+    // Load activities from IndexedDB
+    function loadActivitiesFromIndexedDB() {
+        return new Promise((resolve, reject) => {
+            try {
+                const transaction = db.transaction(['activities'], 'readonly');
+                const store = transaction.objectStore('activities');
+                const request = store.getAll();
+                
+                request.onsuccess = (event) => {
+                    const loadedActivities = event.target.result || [];
+                    loadedActivities.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+                    resolve(loadedActivities);
+                };
+                
+                request.onerror = (event) => {
+                    console.error('Error loading activities from IndexedDB:', event.target.error);
+                    reject(event.target.error);
+                };
+            } catch (error) {
+                console.error('Error in loadActivitiesFromIndexedDB:', error);
+                reject(error);
+            }
+        });
+    }
+    
+    // Save tasks to storage
+    async function saveTasks() {
         try {
-            localStorage.setItem('familyTreeTasks', JSON.stringify(tasks));
+            if (storageMode === 'indexedDB' && db) {
+                await saveTasksToIndexedDB();
+            } else {
+                localStorage.setItem('familyTreeTasks', JSON.stringify(tasks));
+            }
         } catch (e) {
             console.error('Failed to save tasks:', e);
+            if (e.name === 'QuotaExceededError') {
+                showNotification('存储空间不足，请删除一些任务图片', 'error');
+            }
         }
     }
     
-    // Save activities to localStorage
-    function saveActivities() {
+    // Save activities to storage
+    async function saveActivities() {
         try {
-            localStorage.setItem('familyTreeActivities', JSON.stringify(activities));
+            if (storageMode === 'indexedDB' && db) {
+                await saveActivitiesToIndexedDB();
+            } else {
+                localStorage.setItem('familyTreeActivities', JSON.stringify(activities));
+            }
         } catch (e) {
             console.error('Failed to save activities:', e);
+            if (e.name === 'QuotaExceededError') {
+                showNotification('存储空间不足，请删除一些活动图片', 'error');
+            }
         }
+    }
+    
+    // Save tasks to IndexedDB
+    function saveTasksToIndexedDB() {
+        return new Promise((resolve, reject) => {
+            try {
+                const transaction = db.transaction(['tasks'], 'readwrite');
+                const store = transaction.objectStore('tasks');
+                
+                let completedOperations = 0;
+                const totalOperations = tasks.length + 1;
+                
+                const checkCompletion = () => {
+                    if (completedOperations >= totalOperations) {
+                        resolve();
+                    }
+                };
+                
+                const clearRequest = store.clear();
+                clearRequest.onsuccess = () => {
+                    completedOperations++;
+                    
+                    tasks.forEach(task => {
+                        const request = store.put(task);
+                        request.onsuccess = () => {
+                            completedOperations++;
+                            checkCompletion();
+                        };
+                        request.onerror = (e) => {
+                            console.error('Error saving task:', e.target.error);
+                            completedOperations++;
+                            checkCompletion();
+                        };
+                    });
+                    
+                    if (tasks.length === 0) {
+                        checkCompletion();
+                    }
+                };
+                
+                clearRequest.onerror = (e) => {
+                    console.error('Error clearing tasks:', e.target.error);
+                    reject(e.target.error);
+                };
+                
+                transaction.onerror = (event) => {
+                    console.error('Tasks transaction error:', event.target.error);
+                    reject(event.target.error);
+                };
+            } catch (error) {
+                console.error('Error in saveTasksToIndexedDB:', error);
+                reject(error);
+            }
+        });
+    }
+    
+    // Save activities to IndexedDB
+    function saveActivitiesToIndexedDB() {
+        return new Promise((resolve, reject) => {
+            try {
+                const transaction = db.transaction(['activities'], 'readwrite');
+                const store = transaction.objectStore('activities');
+                
+                let completedOperations = 0;
+                const totalOperations = activities.length + 1;
+                
+                const checkCompletion = () => {
+                    if (completedOperations >= totalOperations) {
+                        resolve();
+                    }
+                };
+                
+                const clearRequest = store.clear();
+                clearRequest.onsuccess = () => {
+                    completedOperations++;
+                    
+                    activities.forEach(activity => {
+                        const request = store.put(activity);
+                        request.onsuccess = () => {
+                            completedOperations++;
+                            checkCompletion();
+                        };
+                        request.onerror = (e) => {
+                            console.error('Error saving activity:', e.target.error);
+                            completedOperations++;
+                            checkCompletion();
+                        };
+                    });
+                    
+                    if (activities.length === 0) {
+                        checkCompletion();
+                    }
+                };
+                
+                clearRequest.onerror = (e) => {
+                    console.error('Error clearing activities:', e.target.error);
+                    reject(e.target.error);
+                };
+                
+                transaction.onerror = (event) => {
+                    console.error('Activities transaction error:', event.target.error);
+                    reject(event.target.error);
+                };
+            } catch (error) {
+                console.error('Error in saveActivitiesToIndexedDB:', error);
+                reject(error);
+            }
+        });
     }
     
     // Calculate task progress
@@ -8181,8 +8380,8 @@
     }
     
     // Initialize task panel
-    function initTaskPanel() {
-        loadTasks();
+    async function initTaskPanel() {
+        await loadTasks();
         renderTasks();
         
         // Add event listener for task member search
@@ -9208,8 +9407,8 @@
     }
     
     // Initialize Activity Panel
-    function initActivityPanel() {
-        loadActivities();
+    async function initActivityPanel() {
+        await loadActivities();
         renderActivities();
         
         // Add event listener for activity member search
