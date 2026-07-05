@@ -3798,7 +3798,7 @@
     // Reset family data
     async function resetFamilyData() {
         if (confirm('⚠️ 确定要重置所有数据吗？这将清除所有自定义内容并恢复默认数据。\n\n建议在重置前先导出数据备份，以便日后需要时恢复。')) {
-            // Clear data from both localStorage and IndexedDB
+            // Clear data from localStorage
             localStorage.removeItem('simsFamilyTree');
             localStorage.removeItem('familyTreeTasks');
             localStorage.removeItem('familyTreeActivities');
@@ -3841,7 +3841,7 @@
             
             if (storageMode === 'indexedDB' && db) {
                 try {
-                    // Clear IndexedDB data
+                    // Clear all data from IndexedDB
                     const transaction = db.transaction(['members', 'images', 'tasks', 'activities'], 'readwrite');
                     const membersStore = transaction.objectStore('members');
                     const imagesStore = transaction.objectStore('images');
@@ -3870,7 +3870,7 @@
                             request.onerror = (e) => reject(e.target.error);
                         })
                     ]);
-                    console.log('IndexedDB数据已清除');
+                    console.log('IndexedDB所有数据已清除');
                 } catch (error) {
                     console.error('清除IndexedDB数据时出错:', error);
                 }
