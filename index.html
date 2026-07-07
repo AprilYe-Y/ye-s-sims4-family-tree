@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>模拟人生族谱(v108)</title>
+    <title>模拟人生族谱</title>
     <!-- Tailwind CSS -->
     <script src="https://cdn.tailwindcss.com"></script>
     <link href="https://cdn.jsdelivr.net/npm/font-awesome@4.7.0/css/font-awesome.min.css" rel="stylesheet">
@@ -737,7 +737,7 @@
             <div class="container mx-auto px-4">
                 <div class="flex flex-col md:flex-row justify-between items-center">
                     <div class="mb-4 md:mb-0">
-                        <h3 class="text-lg font-semibold mb-2">模拟人生族谱 <span class="text-sm font-normal text-gray-400">V102.1</span></h3>
+                        <h3 class="text-lg font-semibold mb-2">模拟人生族谱 <span class="text-sm font-normal text-gray-400">V110/span></h3>
                         <p class="text-gray-400 text-sm">记录您的模拟人生家族传奇</p>
                     </div>
                     <div class="flex space-x-6">
@@ -799,11 +799,16 @@
                 </div>
                 
                 <div>
-                    <label for="memberParent" class="block text-sm font-medium text-gray-700 mb-1">关联父母（可选）</label>
-                    <select id="memberParent" name="memberParent"
-                            class="w-full input-field">
-                        <option value="">选择父亲或母亲...</option>
-                    </select>
+                    <label for="memberParentSearch" class="block text-sm font-medium text-gray-700 mb-1">关联父母（最多选择2人）</label>
+                    <div class="relative">
+                        <input type="text" id="memberParentSearch" placeholder="搜索父母姓名..."
+                               class="w-full input-field" oninput="initAddMemberParentSearch()">
+                        <input type="hidden" id="memberParent" name="memberParent" value="">
+                    </div>
+                    <div id="memberParentSearchResults" class="mt-2 max-h-40 overflow-y-auto bg-white border border-gray-200 rounded-lg shadow-sm"></div>
+                    <div id="selectedMemberParent" class="mt-2 flex items-center gap-2 flex-wrap"></div>
+                    <p id="parentRequiredHint" class="text-xs text-red-500 mt-1 hidden">请关联父母</p>
+                    <p id="parentMaxHint" class="text-xs text-red-500 mt-1 hidden">最多只能选择两位父母</p>
                 </div>
                 
                 <div>
@@ -1819,6 +1824,7 @@
     let backupActivities = [];
     let selectedMember = null;
     let zoomLevel = 1;
+    let isFirstLoad = true;
     let storyImagesToUpload = [];
     let addMemberStoryImages = [];
     let currentEditingMember = null;
@@ -1852,11 +1858,770 @@
         });
     }
     
+    // Generic modal toggle function
+    function toggleModal(modalId, options = {}) {
+        const modal = document.getElementById(modalId);
+        if (!modal) return;
+        
+        const {
+            onShow = () => {},
+            onHide = () => {},
+            zIndex = null,
+            showCondition = () => modal.classList.contains('hidden'),
+            isSingleAction = false
+        } = options;
+        
+        const backdrop = modal.querySelector('.modal-backdrop');
+        const content = modal.querySelector('.animate-slide-up, .animate-fade-in') || modal.querySelector('.modal-enter, .modal-exit');
+        
+        if (showCondition()) {
+            if (zIndex) modal.style.zIndex = zIndex;
+            modal.classList.remove('hidden');
+            modal.classList.add('flex');
+            
+            requestAnimationFrame(() => {
+                if (backdrop) backdrop.classList.add('backdrop-enter');
+                if (content) {
+                    content.classList.remove('animate-slide-up', 'animate-fade-in');
+                    content.classList.add('modal-enter');
+                }
+                onShow();
+            });
+        } else {
+            if (content) {
+                content.classList.remove('modal-enter');
+                content.classList.add('modal-exit');
+            }
+            if (backdrop) {
+                backdrop.classList.remove('backdrop-enter');
+                backdrop.classList.add('backdrop-exit');
+            }
+            
+            setTimeout(() => {
+                modal.classList.add('hidden');
+                modal.classList.remove('flex');
+                
+                if (content) {
+                    content.classList.remove('modal-exit');
+                    content.classList.add(modalId === 'imagePreviewModal' ? 'animate-fade-in' : 'animate-slide-up');
+                }
+                if (backdrop) {
+                    backdrop.classList.remove('backdrop-exit');
+                }
+                onHide();
+            }, 200);
+        }
+    }
+
+    // Generic zoom and pan manager
+    class ZoomPanManager {
+        constructor(containerId, options = {}) {
+            this.container = document.getElementById(containerId);
+            this.wrapper = this.container?.parentElement;
+            
+            this.options = {
+                minScale: 0.01,
+                maxScale: 10,
+                zoomFactor: 0.1,
+                zoomLevelId: null,
+                enableInertia: true,
+                friction: 0.95,
+                minSpeed: 0.1,
+                onTransformChange: () => {},
+                ...options
+            };
+            
+            this.scale = 1;
+            this.translateX = 0;
+            this.translateY = 0;
+            
+            this.isDragging = false;
+            this.startX = 0;
+            this.startY = 0;
+            
+            this.initialDistance = 0;
+            this.initialScale = 1;
+            this.initialTranslateX = 0;
+            this.initialTranslateY = 0;
+            
+            this.touchStartX = 0;
+            this.touchStartY = 0;
+            this.lastTouchTime = 0;
+            this.lastTouchX = 0;
+            this.lastTouchY = 0;
+            this.velocityX = 0;
+            this.velocityY = 0;
+            this.inertiaAnimation = null;
+            
+            this._handleWheel = this.handleWheel.bind(this);
+            this._handleMouseDown = this.handleMouseDown.bind(this);
+            this._handleMouseMove = this.handleMouseMove.bind(this);
+            this._handleMouseUp = this.handleMouseUp.bind(this);
+            this._handleTouchStart = this.handleTouchStart.bind(this);
+            this._handleTouchMove = this.handleTouchMove.bind(this);
+            this._handleTouchEnd = this.handleTouchEnd.bind(this);
+            this._handleKeyNavigation = this.handleKeyNavigation.bind(this);
+            this._updateScrollIndicators = this.updateScrollIndicators.bind(this);
+        }
+        
+        init() {
+            if (!this.container || !this.wrapper) return;
+            
+            this.wrapper.addEventListener('wheel', this._handleWheel);
+            this.container.addEventListener('mousedown', this._handleMouseDown);
+            document.addEventListener('mousemove', this._handleMouseMove);
+            document.addEventListener('mouseup', this._handleMouseUp);
+            this.container.addEventListener('touchstart', this._handleTouchStart, { passive: false });
+            this.container.addEventListener('touchmove', this._handleTouchMove, { passive: false });
+            this.container.addEventListener('touchend', this._handleTouchEnd);
+            
+            if (this.options.enableKeyboard) {
+                document.addEventListener('keydown', this._handleKeyNavigation);
+            }
+            
+            if (this.options.enableScrollIndicators) {
+                this.wrapper.addEventListener('scroll', this._updateScrollIndicators);
+            }
+            
+            if (this.options.resizeHandler) {
+                window.addEventListener('resize', this.options.resizeHandler);
+            }
+        }
+        
+        destroy() {
+            if (!this.container || !this.wrapper) return;
+            
+            this.wrapper.removeEventListener('wheel', this._handleWheel);
+            this.container.removeEventListener('mousedown', this._handleMouseDown);
+            document.removeEventListener('mousemove', this._handleMouseMove);
+            document.removeEventListener('mouseup', this._handleMouseUp);
+            this.container.removeEventListener('touchstart', this._handleTouchStart);
+            this.container.removeEventListener('touchmove', this._handleTouchMove);
+            this.container.removeEventListener('touchend', this._handleTouchEnd);
+            
+            if (this.options.enableKeyboard) {
+                document.removeEventListener('keydown', this._handleKeyNavigation);
+            }
+            
+            if (this.options.enableScrollIndicators) {
+                this.wrapper.removeEventListener('scroll', this._updateScrollIndicators);
+            }
+            
+            if (this.options.resizeHandler) {
+                window.removeEventListener('resize', this.options.resizeHandler);
+            }
+            
+            if (this.inertiaAnimation) {
+                cancelAnimationFrame(this.inertiaAnimation);
+                this.inertiaAnimation = null;
+            }
+        }
+        
+        handleKeyNavigation(e) {
+            const scrollAmount = this.options.scrollAmount || 50;
+            
+            switch(e.key) {
+                case 'ArrowUp':
+                    e.preventDefault();
+                    this.wrapper.scrollTop -= scrollAmount;
+                    break;
+                case 'ArrowDown':
+                    e.preventDefault();
+                    this.wrapper.scrollTop += scrollAmount;
+                    break;
+                case 'ArrowLeft':
+                    e.preventDefault();
+                    this.wrapper.scrollLeft -= scrollAmount;
+                    break;
+                case 'ArrowRight':
+                    e.preventDefault();
+                    this.wrapper.scrollLeft += scrollAmount;
+                    break;
+                case 'Home':
+                    e.preventDefault();
+                    this.wrapper.scrollTop = 0;
+                    this.wrapper.scrollLeft = 0;
+                    break;
+                case 'End':
+                    e.preventDefault();
+                    this.wrapper.scrollTop = this.wrapper.scrollHeight;
+                    this.wrapper.scrollLeft = this.wrapper.scrollWidth;
+                    break;
+            }
+        }
+        
+        updateScrollIndicators() {
+            const indicators = this.options.scrollIndicators || {};
+            
+            if (indicators.top) {
+                const el = document.getElementById(indicators.top);
+                if (el) el.style.opacity = this.wrapper.scrollTop > 50 ? '1' : '0';
+            }
+            
+            if (indicators.bottom) {
+                const el = document.getElementById(indicators.bottom);
+                if (el) el.style.opacity = (this.wrapper.scrollHeight - this.wrapper.scrollTop - this.wrapper.clientHeight) > 50 ? '1' : '0';
+            }
+            
+            if (indicators.left) {
+                const el = document.getElementById(indicators.left);
+                if (el) el.style.opacity = this.wrapper.scrollLeft > 50 ? '1' : '0';
+            }
+            
+            if (indicators.right) {
+                const el = document.getElementById(indicators.right);
+                if (el) el.style.opacity = (this.wrapper.scrollWidth - this.wrapper.scrollLeft - this.wrapper.clientWidth) > 50 ? '1' : '0';
+            }
+        }
+        
+        zoomAt(scaleFactor, centerX, centerY) {
+            const newScale = Math.max(this.options.minScale, Math.min(this.options.maxScale, this.scale * scaleFactor));
+            if (newScale === this.scale) return;
+            
+            const rect = this.wrapper.getBoundingClientRect();
+            const localX = centerX - rect.left;
+            const localY = centerY - rect.top;
+            
+            this.translateX = localX - (localX - this.translateX) * newScale / this.scale;
+            this.translateY = localY - (localY - this.translateY) * newScale / this.scale;
+            this.scale = newScale;
+            
+            this.updateTransform();
+        }
+        
+        zoomIn() {
+            const rect = this.wrapper.getBoundingClientRect();
+            this.zoomAt(1 + this.options.zoomFactor, rect.left + rect.width / 2, rect.top + rect.height / 2);
+        }
+        
+        zoomOut() {
+            const rect = this.wrapper.getBoundingClientRect();
+            this.zoomAt(1 - this.options.zoomFactor, rect.left + rect.width / 2, rect.top + rect.height / 2);
+        }
+        
+        reset() {
+            this.scale = 1;
+            this.translateX = 0;
+            this.translateY = 0;
+            this.updateTransform();
+        }
+        
+        fitToScreen(fullFit = false) {
+            const contentWidth = this.container.scrollWidth;
+            const contentHeight = this.container.scrollHeight;
+            const containerWidth = this.wrapper.clientWidth;
+            const containerHeight = this.wrapper.clientHeight;
+            
+            if (contentWidth === 0 || contentHeight === 0) return;
+            
+            let fitScale;
+            if (fullFit) {
+                const scaleX = containerWidth / contentWidth;
+                const scaleY = containerHeight / contentHeight;
+                fitScale = Math.min(scaleX, scaleY) * 0.95;
+            } else {
+                fitScale = (containerHeight / contentHeight) * 0.95;
+            }
+            
+            this.scale = Math.max(this.options.minScale, Math.min(this.options.maxScale, fitScale));
+            this.translateX = (containerWidth - contentWidth * this.scale) / 2;
+            this.translateY = (containerHeight - contentHeight * this.scale) / 2;
+            
+            this.updateTransform();
+        }
+        
+        updateTransform() {
+            this.container.style.transform = `translate(${this.translateX}px, ${this.translateY}px) scale(${this.scale})`;
+            
+            if (this.options.zoomLevelId) {
+                const zoomLevelEl = document.getElementById(this.options.zoomLevelId);
+                if (zoomLevelEl) {
+                    zoomLevelEl.textContent = `${Math.round(this.scale * 100)}%`;
+                }
+            }
+            
+            this.options.onTransformChange(this.scale, this.translateX, this.translateY);
+        }
+        
+        handleWheel(e) {
+            e.preventDefault();
+            const rect = this.wrapper.getBoundingClientRect();
+            const mouseX = e.clientX - rect.left;
+            const mouseY = e.clientY - rect.top;
+            
+            const scaleFactor = e.deltaY > 0 ? 0.9 : 1.1;
+            this.zoomAt(scaleFactor, e.clientX, e.clientY);
+        }
+        
+        handleMouseDown(e) {
+            if (e.button === 0) {
+                this.isDragging = true;
+                this.startX = e.clientX - this.translateX;
+                this.startY = e.clientY - this.translateY;
+                document.body.style.cursor = 'grabbing';
+            }
+        }
+        
+        handleMouseMove(e) {
+            if (!this.isDragging) return;
+            e.preventDefault();
+            this.translateX = e.clientX - this.startX;
+            this.translateY = e.clientY - this.startY;
+            this.updateTransform();
+        }
+        
+        handleMouseUp() {
+            this.isDragging = false;
+            document.body.style.cursor = 'default';
+        }
+        
+        handleTouchStart(e) {
+            if (this.inertiaAnimation) {
+                cancelAnimationFrame(this.inertiaAnimation);
+                this.inertiaAnimation = null;
+            }
+            
+            if (e.touches.length === 1) {
+                this.touchStartX = e.touches[0].clientX - this.translateX;
+                this.touchStartY = e.touches[0].clientY - this.translateY;
+                this.lastTouchTime = Date.now();
+                this.lastTouchX = e.touches[0].clientX;
+                this.lastTouchY = e.touches[0].clientY;
+                this.velocityX = 0;
+                this.velocityY = 0;
+            } else if (e.touches.length === 2) {
+                const dx = e.touches[0].clientX - e.touches[1].clientX;
+                const dy = e.touches[0].clientY - e.touches[1].clientY;
+                this.initialDistance = Math.sqrt(dx * dx + dy * dy);
+                this.initialScale = this.scale;
+                this.initialTranslateX = this.translateX;
+                this.initialTranslateY = this.translateY;
+            }
+        }
+        
+        handleTouchMove(e) {
+            e.preventDefault();
+            
+            if (e.touches.length === 1 && !this.initialDistance) {
+                const currentX = e.touches[0].clientX;
+                const currentY = e.touches[0].clientY;
+                const currentTime = Date.now();
+                const deltaTime = currentTime - this.lastTouchTime;
+                
+                if (deltaTime > 0) {
+                    this.velocityX = (currentX - this.lastTouchX) / deltaTime;
+                    this.velocityY = (currentY - this.lastTouchY) / deltaTime;
+                }
+                
+                this.lastTouchTime = currentTime;
+                this.lastTouchX = currentX;
+                this.lastTouchY = currentY;
+                
+                this.translateX = currentX - this.touchStartX;
+                this.translateY = currentY - this.touchStartY;
+                this.updateTransform();
+            } else if (e.touches.length === 2) {
+                const rect = this.wrapper.getBoundingClientRect();
+                
+                const dx = e.touches[0].clientX - e.touches[1].clientX;
+                const dy = e.touches[0].clientY - e.touches[1].clientY;
+                const distance = Math.sqrt(dx * dx + dy * dy);
+                
+                if (this.initialDistance > 0) {
+                    const scaleFactor = distance / this.initialDistance;
+                    const newScale = Math.max(this.options.minScale, Math.min(this.options.maxScale, this.initialScale * scaleFactor));
+                    
+                    if (newScale !== this.scale) {
+                        const centerX = (e.touches[0].clientX + e.touches[1].clientX) / 2 - rect.left;
+                        const centerY = (e.touches[0].clientY + e.touches[1].clientY) / 2 - rect.top;
+                        
+                        this.translateX = centerX - (centerX - this.initialTranslateX) * newScale / this.initialScale;
+                        this.translateY = centerY - (centerY - this.initialTranslateY) * newScale / this.initialScale;
+                        this.scale = newScale;
+                        this.updateTransform();
+                    }
+                }
+            } else if (e.touches.length === 1 && this.initialDistance > 0) {
+                this.initialDistance = 0;
+                this.touchStartX = e.touches[0].clientX - this.translateX;
+                this.touchStartY = e.touches[0].clientY - this.translateY;
+                this.lastTouchTime = Date.now();
+                this.lastTouchX = e.touches[0].clientX;
+                this.lastTouchY = e.touches[0].clientY;
+                this.velocityX = 0;
+                this.velocityY = 0;
+            }
+        }
+        
+        handleTouchEnd(e) {
+            if (e.touches.length === 0) {
+                this.initialDistance = 0;
+                
+                if (this.options.enableInertia) {
+                    const speed = Math.sqrt(this.velocityX * this.velocityX + this.velocityY * this.velocityY);
+                    if (speed > this.options.minSpeed) {
+                        this.startInertia();
+                    }
+                }
+            } else if (e.touches.length === 1) {
+                this.initialDistance = 0;
+                this.touchStartX = e.touches[0].clientX - this.translateX;
+                this.touchStartY = e.touches[0].clientY - this.translateY;
+                this.lastTouchTime = Date.now();
+                this.lastTouchX = e.touches[0].clientX;
+                this.lastTouchY = e.touches[0].clientY;
+                this.velocityX = 0;
+                this.velocityY = 0;
+            }
+        }
+        
+        startInertia() {
+            const friction = this.options.friction;
+            const minSpeed = this.options.minSpeed;
+            
+            const animate = () => {
+                this.velocityX *= friction;
+                this.velocityY *= friction;
+                
+                const speed = Math.sqrt(this.velocityX * this.velocityX + this.velocityY * this.velocityY);
+                
+                if (speed > minSpeed) {
+                    this.translateX += this.velocityX * 16;
+                    this.translateY += this.velocityY * 16;
+                    this.updateTransform();
+                    this.inertiaAnimation = requestAnimationFrame(animate);
+                } else {
+                    this.inertiaAnimation = null;
+                }
+            };
+            
+            this.inertiaAnimation = requestAnimationFrame(animate);
+        }
+    }
+
+    // Generic storage manager
+    class StorageManager {
+        constructor(options = {}) {
+            this.options = {
+                storageKey: '',
+                indexedDBStore: null,
+                backupVar: null,
+                refreshFn: null,
+                errorMessage: '存储空间不足，请删除一些数据',
+                ...options
+            };
+        }
+        
+        async load(dataArray) {
+            try {
+                if (storageMode === 'indexedDB' && db && this.options.indexedDBStore) {
+                    return await this.loadFromIndexedDB();
+                } else {
+                    const saved = localStorage.getItem(this.options.storageKey);
+                    return saved ? JSON.parse(saved) : [];
+                }
+            } catch (e) {
+                console.error(`Failed to load ${this.options.storageKey}:`, e);
+                return dataArray;
+            }
+        }
+        
+        async save(dataArray) {
+            try {
+                if (this.options.backupVar !== null) {
+                    this.options.backupVar = JSON.parse(JSON.stringify(dataArray));
+                }
+                
+                if (storageMode === 'indexedDB' && db && this.options.indexedDBStore) {
+                    await this.saveToIndexedDB(dataArray);
+                } else {
+                    localStorage.setItem(this.options.storageKey, JSON.stringify(dataArray));
+                }
+            } catch (e) {
+                console.error(`Failed to save ${this.options.storageKey}:`, e);
+                
+                if (this.options.backupVar && this.options.backupVar.length > 0) {
+                    const restored = JSON.parse(JSON.stringify(this.options.backupVar));
+                    if (this.options.refreshFn) this.options.refreshFn();
+                }
+                
+                if (e.name === 'QuotaExceededError') {
+                    showNotification(this.options.errorMessage, 'error');
+                }
+            }
+        }
+        
+        loadFromIndexedDB() {
+            return new Promise((resolve, reject) => {
+                try {
+                    const transaction = db.transaction([this.options.indexedDBStore], 'readonly');
+                    const store = transaction.objectStore(this.options.indexedDBStore);
+                    const request = store.getAll();
+                    
+                    request.onsuccess = (event) => {
+                        const loadedData = event.target.result || [];
+                        resolve(loadedData);
+                    };
+                    
+                    request.onerror = (event) => {
+                        console.error(`Error loading ${this.options.indexedDBStore} from IndexedDB:`, event.target.error);
+                        resolve([]);
+                    };
+                } catch (e) {
+                    console.error(`Failed to load ${this.options.indexedDBStore}:`, e);
+                    resolve([]);
+                }
+            });
+        }
+        
+        saveToIndexedDB(dataArray) {
+            return new Promise((resolve, reject) => {
+                try {
+                    const transaction = db.transaction([this.options.indexedDBStore], 'readwrite');
+                    const store = transaction.objectStore(this.options.indexedDBStore);
+                    
+                    store.clear();
+                    dataArray.forEach(item => {
+                        store.put(item);
+                    });
+                    
+                    transaction.oncomplete = () => {
+                        resolve();
+                    };
+                    
+                    transaction.onerror = (event) => {
+                        console.error(`Error saving ${this.options.indexedDBStore} to IndexedDB:`, event.target.error);
+                        reject(event.target.error);
+                    };
+                } catch (e) {
+                    console.error(`Failed to save ${this.options.indexedDBStore}:`, e);
+                    reject(e);
+                }
+            });
+        }
+    }
+
+    // Generic member search function
+    function searchMembers(options) {
+        const {
+            searchInputId,
+            resultsContainerId,
+            selectedContainerId = null,
+            excludeMemberId = null,
+            filterFn = null,
+            onSelect,
+            showFamilyStatus = false,
+            showBirthDate = true,
+            showSelection = false,
+            selectedClass = 'bg-blue-100'
+        } = options;
+        
+        const query = document.getElementById(searchInputId).value.toLowerCase().trim();
+        const resultsContainer = document.getElementById(resultsContainerId);
+        
+        if (!query) {
+            resultsContainer.innerHTML = '';
+            return;
+        }
+        
+        let selectedIds = [];
+        if (selectedContainerId) {
+            const selectedContainer = document.getElementById(selectedContainerId);
+            if (selectedContainer) {
+                selectedIds = Array.from(selectedContainer.querySelectorAll('[data-member-id]')).map(el => parseInt(el.dataset.memberId));
+            }
+        }
+        
+        let results = familyData.filter(member => {
+            const matchesQuery = member.name.toLowerCase().includes(query) || 
+                (member.story && member.story.toLowerCase().includes(query));
+            
+            const notExcluded = !excludeMemberId || member.id != excludeMemberId;
+            const notSelected = !selectedIds.length || !selectedIds.includes(member.id);
+            
+            if (filterFn) {
+                return matchesQuery && notExcluded && notSelected && filterFn(member);
+            }
+            return matchesQuery && notExcluded && notSelected;
+        });
+        
+        if (results.length === 0) {
+            resultsContainer.innerHTML = '<p class="text-gray-500 text-center py-4">未找到匹配的成员</p>';
+            return;
+        }
+        
+        resultsContainer.innerHTML = results.map(member => {
+            const isSelected = selectedIds.includes(member.id);
+            const familyStatus = showFamilyStatus ? ` ${member.isFamilyMember ? '(家族成员)' : '(配偶)'}` : '';
+            const birthDate = showBirthDate ? `<p class="text-xs text-gray-500">${member.birthDate}${familyStatus}</p>` : '';
+            const selectionIcon = showSelection && isSelected ? '<i class="fa fa-check text-blue-500 ml-auto"></i>' : '';
+            const selectionStyle = showSelection && isSelected ? `style="background-color: #dbeafe;"` : '';
+            
+            return `
+                <div class="flex items-center p-3 hover:bg-gray-50 rounded-lg cursor-pointer transition-colors animate-fade-in"
+                     ${selectionStyle}
+                     onclick="${onSelect}(${member.id}${showSelection ? '' : `, '${member.name}'`})">
+                    <img src="${member.image}" alt="${member.name}" class="w-10 h-10 rounded-full object-cover mr-3">
+                    <div>
+                        <h4 class="font-medium text-gray-800">${member.name}</h4>
+                        ${birthDate}
+                    </div>
+                    ${selectionIcon}
+                </div>
+            `;
+        }).join('');
+    }
+
+    // Add member parent search
+    function initAddMemberParentSearch() {
+        const selectedIds = getSelectedParentIds();
+        searchMembers({
+            searchInputId: 'memberParentSearch',
+            resultsContainerId: 'memberParentSearchResults',
+            onSelect: 'selectAddMemberParent',
+            showFamilyStatus: true,
+            showBirthDate: true,
+            filterFn: member => !selectedIds.includes(member.id)
+        });
+    }
+    
+    function getSelectedParentIds() {
+        const value = document.getElementById('memberParent').value;
+        return value ? value.split(',').map(id => parseInt(id)) : [];
+    }
+    
+    function selectAddMemberParent(memberId, memberName) {
+        const member = familyData.find(m => m.id === memberId);
+        if (!member) return;
+        
+        const selectedIds = getSelectedParentIds();
+        
+        if (selectedIds.length >= 2) {
+            document.getElementById('parentMaxHint').classList.remove('hidden');
+            return;
+        }
+        
+        if (selectedIds.includes(memberId)) {
+            return;
+        }
+        
+        selectedIds.push(memberId);
+        document.getElementById('memberParent').value = selectedIds.join(',');
+        document.getElementById('parentMaxHint').classList.add('hidden');
+        
+        renderSelectedParents(selectedIds);
+        
+        document.getElementById('memberParentSearch').value = '';
+        document.getElementById('memberParentSearchResults').innerHTML = '';
+    }
+    
+    function renderSelectedParents(parentIds) {
+        const container = document.getElementById('selectedMemberParent');
+        container.innerHTML = parentIds.map(id => {
+            const member = familyData.find(m => m.id === id);
+            if (!member) return '';
+            return `
+                <div class="flex items-center gap-2 bg-blue-50 px-3 py-2 rounded-lg">
+                    <img src="${member.image}" alt="${member.name}" class="w-8 h-8 rounded-full object-cover">
+                    <span class="font-medium text-gray-700">${member.name}</span>
+                    <button onclick="removeAddMemberParent(${id})" class="text-red-500 hover:text-red-700">
+                        <i class="fa fa-times"></i>
+                    </button>
+                </div>
+            `;
+        }).join('');
+    }
+    
+    function removeAddMemberParent(memberId) {
+        let selectedIds = getSelectedParentIds();
+        selectedIds = selectedIds.filter(id => id !== memberId);
+        document.getElementById('memberParent').value = selectedIds.join(',');
+        document.getElementById('parentMaxHint').classList.add('hidden');
+        renderSelectedParents(selectedIds);
+    }
+
+    // Generic image operations
+    function renderImagePreviews(images, containerId, removeCallback) {
+        const previewContainer = document.getElementById(containerId);
+        if (!previewContainer) return;
+        
+        previewContainer.innerHTML = images.map((img, i) => `
+            <div class="relative group">
+                <img src="${img}" alt="图片 ${i + 1}" class="w-full h-20 object-cover rounded-lg">
+                <button type="button" onclick="${removeCallback}(${i})" 
+                        class="absolute top-1 right-1 bg-red-500 text-white p-1 rounded-full opacity-0 group-hover:opacity-100 transition-opacity">
+                    <i class="fa fa-times text-xs"></i>
+                </button>
+            </div>
+        `).join('');
+    }
+
+    function removePreviewImage(imagesArray, containerId, removeCallback, index) {
+        if (confirm('确定要删除这张图片吗？')) {
+            imagesArray.splice(index, 1);
+            renderImagePreviews(imagesArray, containerId, removeCallback);
+        }
+    }
+
+    function setCoverImage(dataArray, itemId, imageIndex, saveFn, refreshFn, detailFn) {
+        const item = dataArray.find(t => t.id === itemId);
+        if (!item || !item.images || imageIndex === 0) return;
+        
+        const image = item.images.splice(imageIndex, 1)[0];
+        item.images.unshift(image);
+        item.updatedAt = Date.now();
+        
+        saveFn();
+        if (detailFn) detailFn(itemId);
+        refreshFn();
+        showNotification('封面设置成功！', 'success');
+    }
+
+    function deleteImage(dataArray, itemId, index, saveFn, refreshFn, detailFn) {
+        const item = dataArray.find(t => t.id === itemId);
+        if (!item || !item.images || !item.images[index]) return;
+        
+        if (confirm('确定要删除这张图片吗？')) {
+            item.images.splice(index, 1);
+            item.updatedAt = Date.now();
+            
+            saveFn();
+            if (detailFn) detailFn(itemId);
+            refreshFn();
+            showNotification('图片删除成功！', 'success');
+        }
+    }
+
+    // Generic data change handler
+    async function saveAndRefresh(saveFn, refreshFns = [], notification = null) {
+        try {
+            if (saveFn) await saveFn();
+            refreshFns.forEach(fn => fn());
+            if (notification) showNotification(notification, 'success');
+        } catch (error) {
+            console.error('Save and refresh failed:', error);
+            showNotification('操作失败，请重试', 'error');
+        }
+    }
+
+    // Generic delete handler
+    function deleteItem(itemId, dataArray, saveFn, refreshFn, closeModalFn, itemName = '项目') {
+        if (!itemId) return;
+        if (!confirm(`确定要删除这个${itemName}吗？`)) return;
+        
+        dataArray = dataArray.filter(item => item.id !== itemId);
+        saveFn();
+        refreshFn();
+        closeModalFn();
+        showNotification(`${itemName}已删除`, 'info');
+        return dataArray;
+    }
+
     // Initialize click outside for all modals
     function initModalClickOutside() {
         setupModalClickOutside('addMemberModal', toggleAddMemberModal);
         setupModalClickOutside('addSpouseModal', toggleAddSpouseModal);
-        setupModalClickOutside('memberDetailModal', toggleMemberDetailModal);
+        setupModalClickOutside('memberDetailModal', () => toggleMemberDetailModal());
         setupModalClickOutside('imagePreviewModal', toggleImagePreviewModal);
         setupModalClickOutside('settingsModal', toggleSettingsModal);
         setupModalClickOutside('searchModal', toggleSearchModal);
@@ -1940,37 +2705,14 @@
         }
     }
     
-    // Search custom relation member function
     function searchCustomRelationMember() {
-        const query = document.getElementById('customRelationMemberSearch').value.toLowerCase().trim();
-        const resultsContainer = document.getElementById('customRelationMemberResults');
-        const currentMemberId = document.getElementById('currentMemberId').value;
-        
-        if (!query) {
-            resultsContainer.innerHTML = '';
-            return;
-        }
-        
-        const results = familyData.filter(member => 
-            member.id != currentMemberId && 
-            member.name.toLowerCase().includes(query)
-        );
-        
-        if (results.length === 0) {
-            resultsContainer.innerHTML = '<p class="text-gray-500 text-center py-4">未找到匹配的成员</p>';
-            return;
-        }
-        
-        resultsContainer.innerHTML = results.map(member => `
-            <div class="flex items-center p-3 hover:bg-gray-50 rounded-lg cursor-pointer transition-colors animate-fade-in"
-                 onclick="selectCustomRelationMember(${member.id}, '${member.name}')">
-                <img src="${member.image}" alt="${member.name}" class="w-10 h-10 rounded-full object-cover mr-3">
-                <div>
-                    <h4 class="font-medium text-gray-800">${member.name}</h4>
-                    <p class="text-sm text-gray-500">${member.birthDate} ${member.isFamilyMember ? '(家族成员)' : '(配偶)'}</p>
-                </div>
-            </div>
-        `).join('');
+        searchMembers({
+            searchInputId: 'customRelationMemberSearch',
+            resultsContainerId: 'customRelationMemberResults',
+            excludeMemberId: document.getElementById('currentMemberId').value,
+            onSelect: 'selectCustomRelationMember',
+            showFamilyStatus: true
+        });
     }
     
     // Select custom relation member function
@@ -1982,41 +2724,20 @@
     
     // Search existing spouse function
     function searchExistingSpouse() {
-        const query = document.getElementById('existingSpouseSearch').value.toLowerCase().trim();
-        const resultsContainer = document.getElementById('existingSpouseResults');
         const currentMemberId = document.getElementById('currentMemberId').value;
-        
-        if (!query) {
-            resultsContainer.innerHTML = '';
-            return;
-        }
-        
         const currentMember = familyData.find(m => m.id === parseInt(currentMemberId));
         const existingSpouseIds = currentMember && currentMember.spouseRelationships 
             ? currentMember.spouseRelationships.map(r => r.spouseId) 
             : [];
-        
-        const results = familyData.filter(member => 
-            member.id != currentMemberId && 
-            !existingSpouseIds.includes(member.id) &&
-            member.name.toLowerCase().includes(query)
-        );
-        
-        if (results.length === 0) {
-            resultsContainer.innerHTML = '<p class="text-gray-500 text-center py-4">未找到匹配的成员</p>';
-            return;
-        }
-        
-        resultsContainer.innerHTML = results.map(member => `
-            <div class="flex items-center p-3 hover:bg-gray-50 rounded-lg cursor-pointer transition-colors animate-fade-in"
-                 onclick="selectExistingSpouse(${member.id}, '${member.name}')">
-                <img src="${member.image}" alt="${member.name}" class="w-10 h-10 rounded-full object-cover mr-3">
-                <div>
-                    <h4 class="font-medium text-gray-800">${member.name}</h4>
-                    <p class="text-sm text-gray-500">${member.birthDate} ${member.isFamilyMember ? '(家族成员)' : '(配偶)'}</p>
-                </div>
-            </div>
-        `).join('');
+            
+        searchMembers({
+            searchInputId: 'existingSpouseSearch',
+            resultsContainerId: 'existingSpouseResults',
+            excludeMemberId: currentMemberId,
+            onSelect: 'selectExistingSpouse',
+            showFamilyStatus: true,
+            filterFn: member => !existingSpouseIds.includes(member.id)
+        });
     }
     
     // Select existing spouse function
@@ -2028,16 +2749,12 @@
     
     // Member branch functions
     let branchCurrentMemberId = null;
-    let branchCurrentScale = 1;
-    let branchTranslateX = 0;
-    let branchTranslateY = 0;
-    let branchIsDragging = false;
-    let branchStartX = 0;
-    let branchStartY = 0;
-    let branchInitialScale = 1;
-    let branchInitialTranslateX = 0;
-    let branchInitialTranslateY = 0;
-    let branchInitialDistance = 0;
+    const branchZoomPan = new ZoomPanManager('memberBranchContainer', {
+        zoomLevelId: 'branchZoomLevel',
+        minScale: 0.01,
+        maxScale: 10,
+        enableInertia: false
+    });
     
     function viewMemberBranch(memberId) {
         branchCurrentMemberId = memberId;
@@ -2079,16 +2796,7 @@
         
         // 添加拖动和滚轮缩放事件监听器
         setTimeout(() => {
-            const container = document.getElementById('memberBranchContainer');
-            if (container) {
-                container.addEventListener('mousedown', handleBranchMouseDown);
-                container.addEventListener('touchstart', handleBranchTouchStart, { passive: false });
-                container.addEventListener('wheel', handleBranchWheelZoom);
-                document.addEventListener('mousemove', handleBranchMouseMove);
-                document.addEventListener('touchmove', handleBranchTouchMove, { passive: false });
-                document.addEventListener('mouseup', handleBranchMouseUp);
-                document.addEventListener('touchend', handleBranchTouchEnd);
-            }
+            branchZoomPan.init();
         }, 100);
     }
     
@@ -2108,16 +2816,8 @@
         }
         
         // 移除拖动和滚轮缩放事件监听器
-        const container = document.getElementById('memberBranchContainer');
-        if (container) {
-            container.removeEventListener('mousedown', handleBranchMouseDown);
-            container.removeEventListener('touchstart', handleBranchTouchStart);
-            container.removeEventListener('wheel', handleBranchWheelZoom);
-            document.removeEventListener('mousemove', handleBranchMouseMove);
-            document.removeEventListener('touchmove', handleBranchTouchMove);
-            document.removeEventListener('mouseup', handleBranchMouseUp);
-            document.removeEventListener('touchend', handleBranchTouchEnd);
-        }
+        branchZoomPan.destroy();
+        branchZoomPan.reset();
         
         // 等待动画完成后隐藏
         setTimeout(() => {
@@ -2136,10 +2836,6 @@
                 backdrop.classList.remove('backdrop-exit');
             }
             
-            // 重置缩放和位置
-            branchCurrentScale = 1;
-            branchTranslateX = 0;
-            branchTranslateY = 0;
         }, 200);
     }
     
@@ -2488,42 +3184,12 @@
         return memberHtml;
     }
     
-    function updateBranchTransform() {
-        const container = document.getElementById('memberBranchContainer');
-        if (container) {
-            container.style.transform = `translate(${branchTranslateX}px, ${branchTranslateY}px) scale(${branchCurrentScale})`;
-            document.getElementById('branchZoomLevel').textContent = `${Math.round(branchCurrentScale * 100)}%`;
-        }
-    }
-    
     function branchZoomIn() {
-        const canvasContainer = document.getElementById('memberBranchContainer').parentElement;
-        const centerX = canvasContainer.clientWidth / 2;
-        const centerY = canvasContainer.clientHeight / 2;
-        const newScale = Math.min(3, branchCurrentScale * 1.1);
-        if (newScale !== branchCurrentScale) {
-            const newTranslateX = centerX - (centerX - branchTranslateX) * newScale / branchCurrentScale;
-            const newTranslateY = centerY - (centerY - branchTranslateY) * newScale / branchCurrentScale;
-            branchCurrentScale = newScale;
-            branchTranslateX = newTranslateX;
-            branchTranslateY = newTranslateY;
-            updateBranchTransform();
-        }
+        branchZoomPan.zoomIn();
     }
     
     function branchZoomOut() {
-        const canvasContainer = document.getElementById('memberBranchContainer').parentElement;
-        const centerX = canvasContainer.clientWidth / 2;
-        const centerY = canvasContainer.clientHeight / 2;
-        const newScale = Math.max(0.1, branchCurrentScale * 0.9);
-        if (newScale !== branchCurrentScale) {
-            const newTranslateX = centerX - (centerX - branchTranslateX) * newScale / branchCurrentScale;
-            const newTranslateY = centerY - (centerY - branchTranslateY) * newScale / branchCurrentScale;
-            branchCurrentScale = newScale;
-            branchTranslateX = newTranslateX;
-            branchTranslateY = newTranslateY;
-            updateBranchTransform();
-        }
+        branchZoomPan.zoomOut();
     }
     
     function branchZoomReset() {
@@ -2535,49 +3201,11 @@
     }
 
     function fitBranchToScreen() {
-        const memberBranchContainer = document.getElementById('memberBranchContainer');
-        const canvasContainer = memberBranchContainer.parentElement;
-        
-        if (!memberBranchContainer || !canvasContainer) return;
-        
-        const contentWidth = memberBranchContainer.scrollWidth;
-        const contentHeight = memberBranchContainer.scrollHeight;
-        const containerWidth = canvasContainer.clientWidth;
-        const containerHeight = canvasContainer.clientHeight;
-        
-        if (contentHeight === 0) return;
-        
-        const fitScale = (containerHeight / contentHeight) * 0.95;
-        
-        branchCurrentScale = Math.max(0.1, Math.min(3, fitScale));
-        branchTranslateX = (containerWidth - contentWidth * branchCurrentScale) / 2;
-        branchTranslateY = (containerHeight - contentHeight * branchCurrentScale) / 2;
-        
-        updateBranchTransform();
+        branchZoomPan.fitToScreen(false);
     }
 
     function fitBranchToScreenFull() {
-        const memberBranchContainer = document.getElementById('memberBranchContainer');
-        const canvasContainer = memberBranchContainer.parentElement;
-        
-        if (!memberBranchContainer || !canvasContainer) return;
-        
-        const contentWidth = memberBranchContainer.scrollWidth;
-        const contentHeight = memberBranchContainer.scrollHeight;
-        const containerWidth = canvasContainer.clientWidth;
-        const containerHeight = canvasContainer.clientHeight;
-        
-        if (contentWidth === 0 || contentHeight === 0) return;
-        
-        const scaleX = containerWidth / contentWidth;
-        const scaleY = containerHeight / contentHeight;
-        const fitScale = Math.min(scaleX, scaleY) * 0.95;
-        
-        branchCurrentScale = Math.max(0.1, Math.min(3, fitScale));
-        branchTranslateX = (containerWidth - contentWidth * branchCurrentScale) / 2;
-        branchTranslateY = (containerHeight - contentHeight * branchCurrentScale) / 2;
-        
-        updateBranchTransform();
+        branchZoomPan.fitToScreen(true);
     }
     
     function branchCenterMember() {
@@ -2603,166 +3231,13 @@
         container.scrollTop = newScrollTop;
     }
     
-    // 拖动事件处理函数
-    function handleBranchMouseDown(e) {
-        if (e.button === 0) { // 只处理左键
-            branchIsDragging = true;
-            branchStartX = e.clientX - branchTranslateX;
-            branchStartY = e.clientY - branchTranslateY;
-            document.getElementById('memberBranchContainer').style.cursor = 'grabbing';
-        }
-    }
-    
-    function handleBranchMouseMove(e) {
-        if (branchIsDragging) {
-            branchTranslateX = e.clientX - branchStartX;
-            branchTranslateY = e.clientY - branchStartY;
-            updateBranchTransform();
-        }
-    }
-    
-    function handleBranchMouseUp() {
-        branchIsDragging = false;
-        document.getElementById('memberBranchContainer').style.cursor = 'move';
-    }
-    
-    // 触摸事件处理函数
-    function handleBranchTouchStart(e) {
-        if (e.touches.length === 1) {
-            e.preventDefault();
-            branchIsDragging = true;
-            branchStartX = e.touches[0].clientX - branchTranslateX;
-            branchStartY = e.touches[0].clientY - branchTranslateY;
-        } else if (e.touches.length === 2) {
-            e.preventDefault();
-            branchIsDragging = false;
-            
-            const dx = e.touches[0].clientX - e.touches[1].clientX;
-            const dy = e.touches[0].clientY - e.touches[1].clientY;
-            branchInitialDistance = Math.sqrt(dx * dx + dy * dy);
-            branchInitialScale = branchCurrentScale;
-            branchInitialTranslateX = branchTranslateX;
-            branchInitialTranslateY = branchTranslateY;
-        }
-    }
-    
-    function handleBranchTouchMove(e) {
-        if (branchIsDragging && e.touches.length === 1) {
-            e.preventDefault();
-            branchTranslateX = e.touches[0].clientX - branchStartX;
-            branchTranslateY = e.touches[0].clientY - branchStartY;
-            updateBranchTransform();
-        } else if (e.touches.length === 2) {
-            e.preventDefault();
-            
-            const canvasContainer = document.getElementById('memberBranchContainer').parentElement;
-            const rect = canvasContainer.getBoundingClientRect();
-            
-            const dx = e.touches[0].clientX - e.touches[1].clientX;
-            const dy = e.touches[0].clientY - e.touches[1].clientY;
-            const distance = Math.sqrt(dx * dx + dy * dy);
-            
-            if (branchInitialDistance > 0) {
-                const scaleFactor = distance / branchInitialDistance;
-                const newScale = Math.max(0.1, Math.min(3, branchInitialScale * scaleFactor));
-                
-                if (newScale !== branchCurrentScale) {
-                    const centerX = (e.touches[0].clientX + e.touches[1].clientX) / 2 - rect.left;
-                    const centerY = (e.touches[0].clientY + e.touches[1].clientY) / 2 - rect.top;
-                    
-                    const newTranslateX = centerX - (centerX - branchInitialTranslateX) * newScale / branchInitialScale;
-                    const newTranslateY = centerY - (centerY - branchInitialTranslateY) * newScale / branchInitialScale;
-                    
-                    branchCurrentScale = newScale;
-                    branchTranslateX = newTranslateX;
-                    branchTranslateY = newTranslateY;
-                    updateBranchTransform();
-                }
-            }
-        }
-    }
-    
-    function handleBranchTouchEnd() {
-        branchIsDragging = false;
-        branchInitialDistance = 0;
-    }
-
-    // 滚轮缩放事件处理函数
-    function handleBranchWheelZoom(e) {
-        e.preventDefault();
-        
-        const canvasContainer = document.getElementById('memberBranchContainer').parentElement;
-        const rect = canvasContainer.getBoundingClientRect();
-        const mouseX = e.clientX - rect.left;
-        const mouseY = e.clientY - rect.top;
-        
-        const scaleFactor = e.deltaY > 0 ? 0.9 : 1.1;
-        const newScale = Math.max(0.1, Math.min(3, branchCurrentScale * scaleFactor));
-        
-        if (newScale !== branchCurrentScale) {
-            const newTranslateX = mouseX - (mouseX - branchTranslateX) * newScale / branchCurrentScale;
-            const newTranslateY = mouseY - (mouseY - branchTranslateY) * newScale / branchCurrentScale;
-            
-            branchCurrentScale = newScale;
-            branchTranslateX = newTranslateX;
-            branchTranslateY = newTranslateY;
-            updateBranchTransform();
-        }
-    }
-
     // Settings modal toggle function
     function toggleSettingsModal() {
-        const modal = document.getElementById('settingsModal');
-        
-        if (modal.classList.contains('hidden')) {
-            // 显示模态框
-            modal.classList.remove('hidden');
-            modal.classList.add('flex');
-            
-            // 添加进入动画
-            requestAnimationFrame(() => {
-                const backdrop = modal.querySelector('.modal-backdrop');
-                const content = modal.querySelector('.animate-slide-up');
-                
-                if (backdrop) backdrop.classList.add('backdrop-enter');
-                if (content) {
-                    content.classList.remove('animate-slide-up');
-                    content.classList.add('modal-enter');
-                }
-            });
-        } else {
-            // 隐藏模态框
-            const backdrop = modal.querySelector('.modal-backdrop');
-            const content = modal.querySelector('.modal-enter');
-            
-            if (content) {
-                content.classList.remove('modal-enter');
-                content.classList.add('modal-exit');
-            }
-            
-            if (backdrop) {
-                backdrop.classList.remove('backdrop-enter');
-                backdrop.classList.add('backdrop-exit');
-            }
-            
-            // 等待动画完成后隐藏
-            setTimeout(() => {
-                modal.classList.add('hidden');
-                modal.classList.remove('flex');
-                
-                // 清理动画类
-                if (content) {
-                    content.classList.remove('modal-exit');
-                    content.classList.add('animate-slide-up');
-                }
-                if (backdrop) {
-                    backdrop.classList.remove('backdrop-exit');
-                }
-                
-                // 重置当前标签数组
+        toggleModal('settingsModal', {
+            onHide: () => {
                 currentTags = [];
-            }, 200);
-        }
+            }
+        });
     }
     
 
@@ -3480,26 +3955,17 @@
     
     // 选择标签颜色（添加成员模态框）
     function selectTagColor(color, button) {
-        document.getElementById('memberTagColor').value = color;
-        
-        // 更新选中状态
-        const colorPicker = document.getElementById('memberTagColorPicker');
-        const buttons = colorPicker.querySelectorAll('button');
-        buttons.forEach(btn => {
-            btn.classList.remove('selected-color');
-            btn.style.boxShadow = 'none';
-        });
-        
-        button.classList.add('selected-color');
-        button.style.boxShadow = `0 0 0 3px ${color}40`;
+        selectColor(color, button, 'memberTagColor', 'memberTagColorPicker');
     }
     
-    // 选择标签颜色（编辑标签模态框）
     function selectEditTagColor(color, button) {
-        document.getElementById('editTagColor').value = color;
+        selectColor(color, button, 'editTagColor', 'editTagColorPicker');
+    }
+    
+    function selectColor(color, button, colorInputId, colorPickerId) {
+        document.getElementById(colorInputId).value = color;
         
-        // 更新选中状态
-        const colorPicker = document.getElementById('editTagColorPicker');
+        const colorPicker = document.getElementById(colorPickerId);
         const buttons = colorPicker.querySelectorAll('button');
         buttons.forEach(btn => {
             btn.classList.remove('selected-color');
@@ -3598,59 +4064,466 @@
     }
     
     // 显示通知消息
-    function showNotification(message, type = 'info') {
-        try {
+    class NotificationManager {
+        constructor() {
+            this.positionClasses = {
+                'top-right': 'top-4 right-4 translate-x-full',
+                'top-left': 'top-4 left-4 -translate-x-full',
+                'bottom-right': 'bottom-4 right-4 translate-x-full',
+                'bottom-left': 'bottom-4 left-4 -translate-x-full'
+            };
+            this.typeStyles = {
+                'success': { bg: 'bg-green-500', icon: 'fa-check-circle' },
+                'error': { bg: 'bg-red-500', icon: 'fa-exclamation-circle' },
+                'warning': { bg: 'bg-yellow-500', icon: 'fa-exclamation-triangle' },
+                'info': { bg: 'bg-blue-500', icon: 'fa-info-circle' }
+            };
+            this.notifications = [];
+        }
+        
+        show(message, options = {}) {
+            const {
+                type = 'info',
+                position = 'top-right',
+                duration = 4000,
+                autoDismiss = true,
+                onClick = null
+            } = options;
+            
+            const style = this.typeStyles[type] || this.typeStyles.info;
+            const positionClass = this.positionClasses[position] || this.positionClasses['top-right'];
+            
             const notification = document.createElement('div');
-            
-            // 根据类型设置样式
-            let bgColor = 'bg-blue-500';
-            let icon = 'fa-info-circle';
-            
-            if (type === 'success') {
-                bgColor = 'bg-green-500';
-                icon = 'fa-check-circle';
-            } else if (type === 'error') {
-                bgColor = 'bg-red-500';
-                icon = 'fa-exclamation-circle';
-            } else if (type === 'warning') {
-                bgColor = 'bg-yellow-500';
-                icon = 'fa-exclamation-triangle';
-            }
-            
-            notification.className = `fixed top-4 right-4 z-50 px-6 py-3 ${bgColor} text-white rounded-lg shadow-lg transform transition-all duration-300 translate-x-full`;
+            notification.className = `fixed z-50 px-6 py-3 ${style.bg} text-white rounded-lg shadow-lg transform transition-all duration-300 ${positionClass} flex items-center gap-2 cursor-pointer`;
             notification.innerHTML = `
-                <div class="flex items-center">
-                    <i class="fa ${icon} mr-2"></i>
-                    <span>${message}</span>
-                </div>
+                <i class="fa ${style.icon}"></i>
+                <span>${message}</span>
+                <button class="ml-2 text-white/70 hover:text-white transition-colors">
+                    <i class="fa fa-times"></i>
+                </button>
             `;
             
+            notification.querySelector('button').addEventListener('click', (e) => {
+                e.stopPropagation();
+                this.hide(notification);
+            });
+            
+            if (onClick) {
+                notification.addEventListener('click', onClick);
+            }
+            
             document.body.appendChild(notification);
+            this.notifications.push(notification);
             
-            // Animate in
             setTimeout(() => {
-                notification.classList.remove('translate-x-full');
+                notification.classList.remove(positionClass.includes('translate-x-full') ? 'translate-x-full' : '-translate-x-full');
                 notification.classList.add('translate-x-0');
-            }, 100);
+            }, 50);
             
-            // Animate out and remove
-            setTimeout(() => {
-                notification.classList.add('opacity-0', 'translate-x-full');
+            if (autoDismiss && duration > 0) {
                 setTimeout(() => {
-                    if (notification.parentNode) {
-                        notification.parentNode.removeChild(notification);
-                    }
-                }, 300);
-            }, 4000);
-        } catch (error) {
-            console.error('Error showing notification:', error);
+                    this.hide(notification);
+                }, duration);
+            }
+            
+            return notification;
+        }
+        
+        hide(notification) {
+            if (!notification || !notification.parentNode) return;
+            
+            const index = this.notifications.indexOf(notification);
+            if (index > -1) {
+                this.notifications.splice(index, 1);
+            }
+            
+            notification.classList.add('opacity-0');
+            setTimeout(() => {
+                if (notification.parentNode) {
+                    notification.parentNode.removeChild(notification);
+                }
+            }, 300);
+        }
+        
+        clear() {
+            this.notifications.forEach(n => {
+                if (n.parentNode) n.parentNode.removeChild(n);
+            });
+            this.notifications = [];
+        }
+    }
+    
+    const notificationManager = new NotificationManager();
+    
+    function showNotification(message, type = 'info') {
+        notificationManager.show(message, { type });
+    }
+    
+    class Toolkit {
+        static generateId(prefix = '') {
+            const timestamp = Date.now();
+            const random = Math.random().toString(36).substring(2, 9);
+            return prefix ? `${prefix}_${timestamp}_${random}` : `${timestamp}_${random}`;
+        }
+        
+        static formatDate(date, format = 'YYYY-MM-DD') {
+            if (!(date instanceof Date)) {
+                date = new Date(date);
+            }
+            
+            const year = date.getFullYear();
+            const month = String(date.getMonth() + 1).padStart(2, '0');
+            const day = String(date.getDate()).padStart(2, '0');
+            const hours = String(date.getHours()).padStart(2, '0');
+            const minutes = String(date.getMinutes()).padStart(2, '0');
+            const seconds = String(date.getSeconds()).padStart(2, '0');
+            
+            return format
+                .replace('YYYY', year)
+                .replace('MM', month)
+                .replace('DD', day)
+                .replace('HH', hours)
+                .replace('mm', minutes)
+                .replace('ss', seconds);
+        }
+        
+        static formatDateCN(date) {
+            return this.formatDate(date, 'YYYY年MM月DD日');
+        }
+        
+        static formatDateTime(date) {
+            return this.formatDate(date, 'YYYY-MM-DD HH:mm:ss');
+        }
+        
+        static getRelativeTime(date) {
+            if (!(date instanceof Date)) {
+                date = new Date(date);
+            }
+            
+            const now = new Date();
+            const diff = now.getTime() - date.getTime();
+            const minute = 60 * 1000;
+            const hour = 60 * minute;
+            const day = 24 * hour;
+            const week = 7 * day;
+            const month = 30 * day;
+            const year = 365 * day;
+            
+            if (diff < minute) return '刚刚';
+            if (diff < hour) return `${Math.floor(diff / minute)}分钟前`;
+            if (diff < day) return `${Math.floor(diff / hour)}小时前`;
+            if (diff < week) return `${Math.floor(diff / day)}天前`;
+            if (diff < month) return `${Math.floor(diff / week)}周前`;
+            if (diff < year) return `${Math.floor(diff / month)}个月前`;
+            return `${Math.floor(diff / year)}年前`;
+        }
+        
+        static debounce(func, wait) {
+            let timeout;
+            return function executedFunction(...args) {
+                const later = () => {
+                    clearTimeout(timeout);
+                    func(...args);
+                };
+                clearTimeout(timeout);
+                timeout = setTimeout(later, wait);
+            };
+        }
+        
+        static throttle(func, limit) {
+            let inThrottle;
+            return function executedFunction(...args) {
+                if (!inThrottle) {
+                    func(...args);
+                    inThrottle = true;
+                    setTimeout(() => (inThrottle = false), limit);
+                }
+            };
+        }
+        
+        static clamp(value, min, max) {
+            return Math.min(Math.max(value, min), max);
+        }
+        
+        static safeParseJSON(str, defaultValue = null) {
+            try {
+                return JSON.parse(str);
+            } catch {
+                return defaultValue;
+            }
+        }
+        
+        static safeStringify(obj, defaultValue = '{}') {
+            try {
+                return JSON.stringify(obj);
+            } catch {
+                return defaultValue;
+            }
+        }
+        
+        static getFileExtension(filename) {
+            return filename.split('.').pop().toLowerCase();
+        }
+        
+        static isImageFile(filename) {
+            const extensions = ['jpg', 'jpeg', 'png', 'gif', 'webp', 'svg'];
+            return extensions.includes(this.getFileExtension(filename));
+        }
+        
+        static getInputValue(id, defaultValue = '') {
+            const el = document.getElementById(id);
+            return el ? el.value.trim() : defaultValue;
+        }
+        
+        static validateRequired(id, fieldName) {
+            const value = this.getInputValue(id);
+            if (!value) {
+                showNotification(`请输入${fieldName}`, 'error');
+                return false;
+            }
+            return value;
+        }
+        
+        static validateEmail(email) {
+            const regex = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+            return regex.test(email);
+        }
+        
+        static validateDate(dateStr) {
+            const date = new Date(dateStr);
+            return !isNaN(date.getTime());
+        }
+        
+        static validateNumber(numStr) {
+            const num = parseFloat(numStr);
+            return !isNaN(num);
+        }
+        
+        static exportData(data, filename, format = 'json') {
+            let content, type;
+            
+            if (format === 'json') {
+                content = JSON.stringify(data, null, 2);
+                type = 'application/json;charset=utf-8';
+                filename = `${filename}.json`;
+            } else if (format === 'csv') {
+                content = this.convertToCSV(data);
+                type = 'text/csv;charset=utf-8';
+                filename = `${filename}.csv`;
+            }
+            
+            const blob = new Blob([content], { type });
+            const url = URL.createObjectURL(blob);
+            
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = filename;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+            URL.revokeObjectURL(url);
+            
+            return true;
+        }
+        
+        static importData(file, callback) {
+            const reader = new FileReader();
+            
+            reader.onload = (e) => {
+                try {
+                    const data = JSON.parse(e.target.result);
+                    callback(null, data);
+                } catch (error) {
+                    callback(error, null);
+                }
+            };
+            
+            reader.onerror = () => {
+                callback(new Error('文件读取失败'), null);
+            };
+            
+            reader.readAsText(file);
+        }
+        
+        static convertToCSV(data) {
+            if (!data || !Array.isArray(data)) return '';
+            
+            const headers = Object.keys(data[0] || {});
+            const rows = data.map(item => 
+                headers.map(header => {
+                    const value = item[header];
+                    return typeof value === 'string' && value.includes(',') ? `"${value}"` : value;
+                }).join(',')
+            );
+            
+            return [headers.join(','), ...rows].join('\n');
+        }
+        
+        static downloadFile(url, filename) {
+            const a = document.createElement('a');
+            a.href = url;
+            a.download = filename;
+            document.body.appendChild(a);
+            a.click();
+            document.body.removeChild(a);
+        }
+    }
+    
+    class ImageManager {
+        static async processImage(file, options = {}) {
+            const {
+                maxSize = 800,
+                quality = 0.8,
+                format = 'jpeg',
+                cropToSquare = false,
+                circular = false
+            } = options;
+            
+            return new Promise((resolve, reject) => {
+                if (!file.type.startsWith('image/')) {
+                    showNotification('请选择图片文件', 'error');
+                    reject(new Error('Invalid file type'));
+                    return;
+                }
+                
+                if (file.size > 5 * 1024 * 1024) {
+                    showNotification('图片大小不能超过5MB', 'error');
+                    reject(new Error('File too large'));
+                    return;
+                }
+                
+                const reader = new FileReader();
+                reader.onload = function(e) {
+                    const img = new Image();
+                    img.onload = function() {
+                        const canvas = document.createElement('canvas');
+                        const ctx = canvas.getContext('2d');
+                        
+                        let width = img.width;
+                        let height = img.height;
+                        let sourceX = 0;
+                        let sourceY = 0;
+                        let sourceWidth = width;
+                        let sourceHeight = height;
+                        
+                        if (cropToSquare || circular) {
+                            const squareSize = Math.min(width, height);
+                            sourceX = (width - squareSize) / 2;
+                            sourceY = (height - squareSize) / 2;
+                            sourceWidth = squareSize;
+                            sourceHeight = squareSize;
+                            width = squareSize;
+                            height = squareSize;
+                        }
+                        
+                        if (width > maxSize || height > maxSize) {
+                            if (width > height) {
+                                height = (height * maxSize) / width;
+                                width = maxSize;
+                            } else {
+                                width = (width * maxSize) / height;
+                                height = maxSize;
+                            }
+                        }
+                        
+                        canvas.width = width;
+                        canvas.height = height;
+                        
+                        if (circular) {
+                            ctx.fillStyle = '#f0f0f0';
+                            ctx.fillRect(0, 0, width, height);
+                            
+                            ctx.save();
+                            ctx.beginPath();
+                            ctx.arc(width / 2, height / 2, width / 2, 0, Math.PI * 2);
+                            ctx.clip();
+                            
+                            ctx.drawImage(img, sourceX, sourceY, sourceWidth, sourceHeight, 0, 0, width, height);
+                            ctx.restore();
+                            
+                            ctx.beginPath();
+                            ctx.arc(width / 2, height / 2, width / 2 - 2, 0, Math.PI * 2);
+                            ctx.strokeStyle = 'rgba(255, 255, 255, 0.8)';
+                            ctx.lineWidth = 4;
+                            ctx.stroke();
+                        } else {
+                            ctx.drawImage(img, sourceX, sourceY, sourceWidth, sourceHeight, 0, 0, width, height);
+                        }
+                        
+                        const mimeType = format === 'png' ? 'image/png' : 'image/jpeg';
+                        const compressedImage = canvas.toDataURL(mimeType, quality);
+                        resolve(compressedImage);
+                    };
+                    
+                    img.onerror = () => reject(new Error('Image load failed'));
+                    img.src = e.target.result;
+                };
+                
+                reader.onerror = () => reject(new Error('File read failed'));
+                reader.readAsDataURL(file);
+            });
+        }
+        
+        static async processAvatar(file) {
+            return this.processImage(file, {
+                maxSize: 400,
+                quality: 0.9,
+                format: 'png',
+                circular: true
+            });
+        }
+        
+        static async processImageFile(file) {
+            return this.processImage(file, {
+                maxSize: 800,
+                quality: 0.8,
+                format: 'jpeg'
+            });
+        }
+        
+        static renderPreviews(images, containerId, removeCallbackName) {
+            const container = document.getElementById(containerId);
+            if (!container) return;
+            
+            container.innerHTML = images.map((img, index) => `
+                <div class="relative group">
+                    <img src="${img}" alt="图片 ${index + 1}" class="w-full h-20 object-cover rounded-lg">
+                    <button type="button" onclick="${removeCallbackName}(${index})" 
+                            class="absolute top-1 right-1 bg-red-500 text-white p-1 rounded-full opacity-0 group-hover:opacity-100 transition-opacity">
+                        <i class="fa fa-times"></i>
+                    </button>
+                </div>
+            `).join('');
+        }
+        
+        static renderPreview(images, containerId, removeCallbackName, showFilename = false, filename = '') {
+            const container = document.getElementById(containerId);
+            if (!container) return;
+            
+            const imgDiv = document.createElement('div');
+            imgDiv.className = 'relative group';
+            
+            let html = `<img src="${images[images.length - 1]}" alt="${filename || '图片'}" class="w-full h-20 object-cover rounded-lg">`;
+            
+            if (showFilename && filename) {
+                html += `<div class="absolute bottom-0 left-0 right-0 bg-black/60 text-white text-xs px-2 py-1 truncate">${filename}</div>`;
+            }
+            
+            html += `
+                <button type="button" onclick="${removeCallbackName}(${images.length - 1})" 
+                        class="absolute top-1 right-1 bg-red-500 text-white p-1 rounded-full opacity-0 group-hover:opacity-100 transition-opacity">
+                    <i class="fa fa-times"></i>
+                </button>
+            `;
+            
+            imgDiv.innerHTML = html;
+            container.appendChild(imgDiv);
         }
     }
     
     // Export family data for cross-browser sharing
     function exportFamilyData() {
         try {
-            // 导出完整数据：包含成员、任务和活动
             const exportData = {
                 version: 1,
                 exportDate: new Date().toISOString(),
@@ -3658,42 +4531,19 @@
                 tasks: tasks,
                 activities: activities
             };
-            const dataString = JSON.stringify(exportData, null, 2);
-            const blob = new Blob([dataString], { type: 'application/json;charset=utf-8' });
-            const url = URL.createObjectURL(blob);
             
-            const a = document.createElement('a');
-            a.href = url;
-            a.download = `sims4-family-tree-${new Date().toISOString().split('T')[0]}.json`;
-            document.body.appendChild(a);
-            a.click();
-            document.body.removeChild(a);
+            const filename = `sims4-family-tree-${Toolkit.formatDate(new Date())}`;
+            Toolkit.exportData(exportData, filename);
             
-            URL.revokeObjectURL(url);
-            
-            // Show success notification
-            const notification = document.createElement('div');
-            notification.className = 'fixed top-4 right-4 z-50 px-6 py-3 bg-green-500 text-white rounded-lg shadow-lg transform transition-all duration-300';
-            notification.innerHTML = `
-                <div class="flex items-center">
-                    <i class="fa fa-check-circle mr-2"></i>
-                    <span>✅ 数据文件已导出！可在其他浏览器导入此文件实现数据共享。</span>
-                </div>
-            `;
-            document.body.appendChild(notification);
-            
-            setTimeout(() => {
-                notification.classList.add('opacity-0', 'translate-x-full');
-                setTimeout(() => {
-                    if (notification.parentNode) {
-                        notification.parentNode.removeChild(notification);
-                    }
-                }, 300);
-            }, 4000);
+            notificationManager.show('✅ 数据文件已导出！可在其他浏览器导入此文件实现数据共享。', {
+                type: 'success',
+                position: 'top-right',
+                duration: 4000
+            });
             
         } catch (error) {
             console.error('导出数据时出错:', error);
-            alert('❌ 导出失败，请重试。');
+            showNotification('❌ 导出失败，请重试。', 'error');
         }
     }
     
@@ -4047,9 +4897,12 @@
         console.log('Family tree rendered successfully');
         console.log('Root members:', rootMembers);
         
-        requestAnimationFrame(() => {
-            requestAnimationFrame(fitToScreen);
-        });
+        if (isFirstLoad) {
+            isFirstLoad = false;
+            requestAnimationFrame(() => {
+                requestAnimationFrame(fitToScreen);
+            });
+        }
     }
     
     // Toggle branch collapse state
@@ -4654,160 +5507,40 @@
 
     // 优化的模态框切换函数
     function toggleAddMemberModal() {
-        const modal = document.getElementById('addMemberModal');
-        
-        if (modal.classList.contains('hidden')) {
-            // 显示模态框
-            modal.classList.remove('hidden');
-            modal.classList.add('flex');
-            
-            // 设置z-index为100，确保显示在成员档案上面
-            modal.style.zIndex = '100';
-            
-            // 重置表单和填充选项
-            requestAnimationFrame(() => {
+        toggleModal('addMemberModal', {
+            zIndex: '100',
+            onShow: () => {
                 document.getElementById('addMemberForm').reset();
-                populateParentOptions();
-                
-                // 显示历史标签
                 displayMemberTagHistory();
                 
-                // 重置父元素选择器状态
-                const parentSelect = document.getElementById('memberParent');
-                parentSelect.disabled = false;
+                document.getElementById('memberParent').value = '';
+                document.getElementById('memberParentSearch').value = '';
+                document.getElementById('memberParentSearchResults').innerHTML = '';
+                document.getElementById('selectedMemberParent').innerHTML = '';
+                document.getElementById('parentRequiredHint').classList.add('hidden');
                 
-                // 重置标签文本
-                const existingLabel = parentSelect.previousElementSibling;
-                if (existingLabel && existingLabel.tagName === 'LABEL') {
-                    existingLabel.innerHTML = '关联父母（可选）';
+                const parentLabel = document.querySelector('label[for="memberParentSearch"]');
+                if (parentLabel) {
+                    parentLabel.innerHTML = familyData.length > 0 ? '关联父母 *' : '关联父母';
                 }
-                
-                // 添加进入动画
-                const backdrop = modal.querySelector('.modal-backdrop');
-                const content = modal.querySelector('.animate-slide-up');
-                
-                if (backdrop) backdrop.classList.add('backdrop-enter');
-                if (content) {
-                    content.classList.remove('animate-slide-up');
-                    content.classList.add('modal-enter');
-                }
-            });
-        } else {
-            // 隐藏模态框
-            const backdrop = modal.querySelector('.modal-backdrop');
-            const content = modal.querySelector('.modal-enter');
-            
-            if (content) {
-                content.classList.remove('modal-enter');
-                content.classList.add('modal-exit');
-            }
-            
-            if (backdrop) {
-                backdrop.classList.remove('backdrop-enter');
-                backdrop.classList.add('backdrop-exit');
-            }
-            
-            // 等待动画完成后隐藏
-            setTimeout(() => {
-                modal.classList.add('hidden');
-                modal.classList.remove('flex');
-                
-                // 清理动画类
-                if (content) {
-                    content.classList.remove('modal-exit');
-                    content.classList.add('animate-slide-up');
-                }
-                if (backdrop) {
-                    backdrop.classList.remove('backdrop-exit');
-                }
-                
-                // 重置父元素选择器状态
-                const parentSelect = document.getElementById('memberParent');
-                if (parentSelect) {
-                    parentSelect.disabled = false;
-                }
-                
-                // 重置标签输入
+            },
+            onHide: () => {
                 const tagsContainer = document.getElementById('memberTagsContainer');
-                if (tagsContainer) {
-                    tagsContainer.innerHTML = '';
-                }
+                if (tagsContainer) tagsContainer.innerHTML = '';
                 
-                // 重置故事图片预览
                 const storyImagesPreview = document.getElementById('memberStoryImagesPreview');
-                if (storyImagesPreview) {
-                    storyImagesPreview.innerHTML = '';
-                }
+                if (storyImagesPreview) storyImagesPreview.innerHTML = '';
                 addMemberStoryImages = [];
-                
-                // 重置当前标签数组
                 currentTags = [];
-            }, 200);
-        }
+            }
+        });
     }
 
     // Image preview functions
     function toggleImagePreviewModal() {
-        const modal = document.getElementById('imagePreviewModal');
-        
-        if (modal.classList.contains('hidden')) {
-            // 显示模态框
-            modal.classList.remove('hidden');
-            modal.classList.add('flex');
-            
-            // 设置z-index为100，确保显示在成员档案上面
-            modal.style.zIndex = '100';
-            
-            // 添加进入动画
-            requestAnimationFrame(() => {
-                const backdrop = modal.querySelector('.modal-backdrop');
-                const content = modal.querySelector('.animate-fade-in');
-                
-                if (backdrop) backdrop.classList.add('backdrop-enter');
-                if (content) {
-                    content.classList.remove('animate-fade-in');
-                    content.classList.add('modal-enter');
-                }
-            });
-            
-            // 添加点击外部关闭功能
-            setTimeout(() => {
-                modal.addEventListener('click', function(e) {
-                    if (e.target === modal || e.target === document.getElementById('imagePreview')) {
-                        toggleImagePreviewModal();
-                    }
-                });
-            }, 100);
-        } else {
-            // 隐藏模态框
-            const backdrop = modal.querySelector('.modal-backdrop');
-            const content = modal.querySelector('.modal-enter');
-            
-            if (content) {
-                content.classList.remove('modal-enter');
-                content.classList.add('modal-exit');
-            }
-            
-            if (backdrop) {
-                backdrop.classList.remove('backdrop-enter');
-                backdrop.classList.add('backdrop-exit');
-            }
-            
-            // 等待动画完成后隐藏
-            setTimeout(() => {
-                modal.classList.add('hidden');
-                modal.classList.remove('flex');
-                
-                // 清理动画类
-                if (content) {
-                    content.classList.remove('modal-exit');
-                    content.classList.add('animate-fade-in');
-                }
-                if (backdrop) {
-                    backdrop.classList.remove('backdrop-exit');
-                }
-            }, 200);
-        }
+        toggleModal('imagePreviewModal', {
+            zIndex: '100'
+        });
     }
 
     function previewImage(src, title = '图片预览', caption = '') {
@@ -4818,195 +5551,48 @@
     }
 
     function toggleMemberDetailModal(memberId = null) {
-        const modal = document.getElementById('memberDetailModal');
-        
-        if (memberId) {
-            // 如果提供了memberId，总是显示模态框并更新内容
-            selectedMember = memberId;
-            
-            // 将成员详情窗口的z-index设置为100，使其显示在所有其他窗口上面
-            modal.style.zIndex = '100';
-            
-            // 先更新内容，再显示模态框
-            showMemberDetails(memberId);
-            
-            modal.classList.remove('hidden');
-            modal.classList.add('flex');
-            
-            // 添加进入动画
-            requestAnimationFrame(() => {
-                const backdrop = modal.querySelector('.modal-backdrop');
-                const content = modal.querySelector('.animate-slide-up');
-                
-                if (backdrop) backdrop.classList.add('backdrop-enter');
-                if (content) {
-                    content.classList.remove('animate-slide-up');
-                    content.classList.add('modal-enter');
-                }
-            });
-        } else {
-            // 如果没有提供memberId，隐藏模态框
-            const backdrop = modal.querySelector('.modal-backdrop');
-            const content = modal.querySelector('.modal-enter');
-            
-            if (content) {
-                content.classList.remove('modal-enter');
-                content.classList.add('modal-exit');
+        toggleModal('memberDetailModal', {
+            zIndex: '100',
+            showCondition: () => !!memberId,
+            isSingleAction: true,
+            onShow: () => {
+                selectedMember = memberId;
+                showMemberDetails(memberId);
+            },
+            onHide: () => {
+                document.getElementById('memberDetailModal').style.zIndex = '40';
             }
-            
-            if (backdrop) {
-                backdrop.classList.remove('backdrop-enter');
-                backdrop.classList.add('backdrop-exit');
-            }
-            
-            // 等待动画完成后隐藏
-            setTimeout(() => {
-                modal.classList.add('hidden');
-                modal.classList.remove('flex');
-                
-                // 恢复成员详情窗口的z-index为40
-                modal.style.zIndex = '40';
-                
-                // 清理动画类
-                if (content) {
-                    content.classList.remove('modal-exit');
-                    content.classList.add('animate-slide-up');
-                }
-                if (backdrop) {
-                    backdrop.classList.remove('backdrop-exit');
-                }
-            }, 200);
-        }
+        });
     }
 
     function toggleSearchModal() {
-        const modal = document.getElementById('searchModal');
-        
-        if (modal.classList.contains('hidden')) {
-            // 显示模态框
-            modal.classList.remove('hidden');
-            modal.classList.add('flex');
-            
-            // 重置搜索框
-            requestAnimationFrame(() => {
+        toggleModal('searchModal', {
+            onShow: () => {
                 document.getElementById('searchInput').value = '';
                 document.getElementById('searchResults').innerHTML = '';
-                
-                // 添加进入动画
-                const backdrop = modal.querySelector('.modal-backdrop');
-                const content = modal.querySelector('.animate-slide-up');
-                
-                if (backdrop) backdrop.classList.add('backdrop-enter');
-                if (content) {
-                    content.classList.remove('animate-slide-up');
-                    content.classList.add('modal-enter');
-                }
-                
-                // 聚焦搜索框
                 document.getElementById('searchInput').focus();
-            });
-        } else {
-            // 隐藏模态框
-            const backdrop = modal.querySelector('.modal-backdrop');
-            const content = modal.querySelector('.modal-enter');
-            
-            if (content) {
-                content.classList.remove('modal-enter');
-                content.classList.add('modal-exit');
             }
-            
-            if (backdrop) {
-                backdrop.classList.remove('backdrop-enter');
-                backdrop.classList.add('backdrop-exit');
-            }
-            
-            // 等待动画完成后隐藏
-            setTimeout(() => {
-                modal.classList.add('hidden');
-                modal.classList.remove('flex');
-                
-                // 清理动画类
-                if (content) {
-                    content.classList.remove('modal-exit');
-                    content.classList.add('animate-slide-up');
-                }
-                if (backdrop) {
-                    backdrop.classList.remove('backdrop-exit');
-                }
-            }, 200);
-        }
+        });
     }
 
     function toggleAddSpouseModal(memberId = null) {
-        const modal = document.getElementById('addSpouseModal');
-        
-        if (memberId) {
-            // 如果提供了memberId，总是显示模态框并设置当前成员
-            modal.classList.remove('hidden');
-            modal.classList.add('flex');
-            
-            // 设置z-index为100，确保显示在成员档案上面
-            modal.style.zIndex = '100';
-            
-            // 设置当前成员ID
-            const currentMemberIdInput = document.getElementById('currentMemberId');
-            if (currentMemberIdInput) {
-                currentMemberIdInput.value = memberId;
-                console.log('设置当前成员ID:', memberId);
-            } else {
-                console.error('未找到currentMemberId输入框');
-            }
-            
-            // 重置表单和初始化
-            resetAddSpouseForm();
-            toggleSpouseSelectionType();
-            
-            // 添加进入动画
-            requestAnimationFrame(() => {
-                const backdrop = modal.querySelector('.modal-backdrop');
-                const content = modal.querySelector('.animate-slide-up');
-                
-                if (backdrop) backdrop.classList.add('backdrop-enter');
-                if (content) {
-                    content.classList.remove('animate-slide-up');
-                    content.classList.add('modal-enter');
+        toggleModal('addSpouseModal', {
+            zIndex: '100',
+            showCondition: () => !!memberId,
+            isSingleAction: true,
+            onShow: () => {
+                const currentMemberIdInput = document.getElementById('currentMemberId');
+                if (currentMemberIdInput) {
+                    currentMemberIdInput.value = memberId;
                 }
-            });
-        } else {
-            // 如果没有提供memberId，隐藏模态框
-            const backdrop = modal.querySelector('.modal-backdrop');
-            const content = modal.querySelector('.modal-enter');
-            
-            if (content) {
-                content.classList.remove('modal-enter');
-                content.classList.add('modal-exit');
-            }
-            
-            if (backdrop) {
-                backdrop.classList.remove('backdrop-enter');
-                backdrop.classList.add('backdrop-exit');
-            }
-            
-            // 等待动画完成后隐藏
-            setTimeout(() => {
-                modal.classList.add('hidden');
-                modal.classList.remove('flex');
-                
-                // 隐藏时清除当前成员ID
-                document.getElementById('currentMemberId').value = '';
-                // 隐藏时也重置表单，确保下次打开时是干净的
                 resetAddSpouseForm();
-                
-                // 清理动画类
-                if (content) {
-                    content.classList.remove('modal-exit');
-                    content.classList.add('animate-slide-up');
-                }
-                if (backdrop) {
-                    backdrop.classList.remove('backdrop-exit');
-                }
-            }, 200);
-        }
+                toggleSpouseSelectionType();
+            },
+            onHide: () => {
+                document.getElementById('currentMemberId').value = '';
+                resetAddSpouseForm();
+            }
+        });
     }
     
     // 彻底重置添加配偶表单
@@ -5300,15 +5886,20 @@
     function handleAddMember(event) {
         event.preventDefault();
         
-        const name = document.getElementById('memberName').value.trim();
+        const name = Toolkit.getInputValue('memberName');
         const gender = document.getElementById('memberGender').value;
-        const birthDate = document.getElementById('memberBirthDate').value.trim();
-        const deathDate = document.getElementById('memberDeathDate').value.trim();
-        const parentId = parseInt(document.getElementById('memberParent').value);
-        const story = document.getElementById('memberStory').value.trim();
+        const birthDate = Toolkit.getInputValue('memberBirthDate');
+        const deathDate = Toolkit.getInputValue('memberDeathDate');
+        const parentIds = getSelectedParentIds();
+        const story = Toolkit.getInputValue('memberStory');
         
         if (!name || !gender) {
             alert('请填写必填信息');
+            return;
+        }
+        
+        if (familyData.length > 0 && parentIds.length === 0) {
+            document.getElementById('parentRequiredHint').classList.remove('hidden');
             return;
         }
         
@@ -5323,7 +5914,7 @@
             deathDate: deathDate || null,
             image: generateDefaultAvatar(gender),
             spouseRelationships: [],
-            parents: parentId ? [parentId] : [],
+            parents: parentIds,
             story: story || '这是一个新的家族成员。点击编辑按钮来添加更多内容。',
             storyImages: [...addMemberStoryImages],
             tags: [...currentTags],
@@ -5332,12 +5923,11 @@
             updatedAt: newId
         };
         
-        // Process avatar
         if (avatarFile) {
-            processAvatarUpload(avatarFile, (compressedImage) => {
+            ImageManager.processAvatar(avatarFile).then(compressedImage => {
                 newMember.image = compressedImage;
                 finalizeMemberCreation();
-            });
+            }).catch(() => finalizeMemberCreation());
         } else {
             finalizeMemberCreation();
         }
@@ -5346,13 +5936,13 @@
             familyData.push(newMember);
             
             // Update parent's children array
-            if (parentId) {
+            parentIds.forEach(parentId => {
                 const parent = familyData.find(m => m.id === parentId);
                 if (parent) {
                     if (!parent.children) parent.children = [];
                     parent.children.push(newId);
                 }
-            }
+            });
             
             saveFamilyData();
             renderFamilyTree();
@@ -5370,11 +5960,11 @@
         event.preventDefault();
         
         const childId = parseInt(document.getElementById('currentChildId').value);
-        const parentName = document.getElementById('parentName').value.trim();
+        const parentName = Toolkit.getInputValue('parentName');
         const parentGender = document.getElementById('parentGender').value;
-        const parentBirthDate = document.getElementById('parentBirthDate').value.trim();
-        const parentDeathDate = document.getElementById('parentDeathDate').value.trim();
-        const parentStory = document.getElementById('parentStory').value.trim();
+        const parentBirthDate = Toolkit.getInputValue('parentBirthDate');
+        const parentDeathDate = Toolkit.getInputValue('parentDeathDate');
+        const parentStory = Toolkit.getInputValue('parentStory');
         
         if (!parentName || !parentGender) {
             alert('请填写必填信息');
@@ -5408,10 +5998,10 @@
         };
         
         if (avatarFile) {
-            processAvatarUpload(avatarFile, (compressedImage) => {
+            ImageManager.processAvatar(avatarFile).then(compressedImage => {
                 parent.image = compressedImage;
                 finalizeParentCreation();
-            });
+            }).catch(() => finalizeParentCreation());
         } else {
             finalizeParentCreation();
         }
@@ -5699,10 +6289,10 @@
             });
             
             if (avatarFile) {
-                processAvatarUpload(avatarFile, (compressedImage) => {
+                ImageManager.processAvatar(avatarFile).then(compressedImage => {
                     spouse.image = compressedImage;
                     finalizeSpouseCreation();
-                });
+                }).catch(() => finalizeSpouseCreation());
             } else {
                 finalizeSpouseCreation();
             }
@@ -5767,12 +6357,11 @@
         member.deathDate = deathDate || '';
         member.updatedAt = Date.now(); // Update edit time
         
-        // 处理头像上传
         if (editBasicInfoAvatarFile) {
-            processAvatarUpload(editBasicInfoAvatarFile, (compressedImage) => {
+            ImageManager.processAvatar(editBasicInfoAvatarFile).then(compressedImage => {
                 member.image = compressedImage;
                 finalizeBasicInfoSave(memberId);
-            });
+            }).catch(() => finalizeBasicInfoSave(memberId));
         } else {
             finalizeBasicInfoSave(memberId);
         }
@@ -5794,48 +6383,22 @@
     }
 
     // Helper functions
-    function populateParentOptions() {
-        const select = document.getElementById('memberParent');
-        select.innerHTML = '<option value="">选择父亲或母亲...</option>';
-        
-        const familyMembers = familyData.filter(m => m.isFamilyMember);
-        familyMembers.forEach(member => {
-            const option = document.createElement('option');
-            option.value = member.id;
-            option.textContent = `${member.name} (${member.gender === 'male' ? '男' : '女'}) - ${member.birthDate}`;
-            select.appendChild(option);
-        });
-    }
-
     function searchMember() {
-        const query = document.getElementById('searchInput').value.toLowerCase().trim();
+        searchMembers({
+            searchInputId: 'searchInput',
+            resultsContainerId: 'searchResults',
+            onSelect: 'toggleMemberDetailModal',
+            showFamilyStatus: true,
+            showBirthDate: true
+        });
+        
         const resultsContainer = document.getElementById('searchResults');
-        
-        if (!query) {
-            resultsContainer.innerHTML = '';
-            return;
+        if (resultsContainer) {
+            resultsContainer.querySelectorAll('[onclick]').forEach(el => {
+                const originalOnclick = el.getAttribute('onclick');
+                el.setAttribute('onclick', `${originalOnclick}; toggleSearchModal();`);
+            });
         }
-        
-        const results = familyData.filter(member => 
-            member.name.toLowerCase().includes(query) || 
-            (member.story && member.story.toLowerCase().includes(query))
-        );
-        
-        if (results.length === 0) {
-            resultsContainer.innerHTML = '<p class="text-gray-500 text-center py-4">未找到匹配的成员</p>';
-            return;
-        }
-        
-        resultsContainer.innerHTML = results.map(member => `
-            <div class="flex items-center p-3 hover:bg-gray-50 rounded-lg cursor-pointer transition-colors animate-fade-in"
-                 onclick="toggleMemberDetailModal(${member.id}); toggleSearchModal();">
-                <img src="${member.image}" alt="${member.name}" class="w-12 h-12 rounded-full object-cover mr-3">
-                <div>
-                    <h4 class="font-medium text-gray-800">${member.name}</h4>
-                    <p class="text-sm text-gray-500">${member.birthDate} ${member.isFamilyMember ? '(家族成员)' : '(配偶)'}</p>
-                </div>
-            </div>
-        `).join('');
     }
 
     function editMemberStory(memberId) {
@@ -5986,150 +6549,16 @@
 
 
 
-    // Process general images (story images)
-    function processImageUpload(file, callback) {
-        if (!file.type.startsWith('image/')) {
-            alert('请选择图片文件');
-            return;
-        }
-        
-        if (file.size > 5 * 1024 * 1024) {
-            alert('图片大小不能超过5MB');
-            return;
-        }
-        
-        const reader = new FileReader();
-        reader.onload = function(e) {
-            const img = new Image();
-            img.onload = function() {
-                const canvas = document.createElement('canvas');
-                const ctx = canvas.getContext('2d');
-                
-                // Resize image to max 800px width/height
-                let width = img.width;
-                let height = img.height;
-                const maxSize = 800;
-                
-                if (width > height && width > maxSize) {
-                    height = (height * maxSize) / width;
-                    width = maxSize;
-                } else if (height > maxSize) {
-                    width = (width * maxSize) / height;
-                    height = maxSize;
-                }
-                
-                canvas.width = width;
-                canvas.height = height;
-                ctx.drawImage(img, 0, 0, width, height);
-                
-                const compressedImage = canvas.toDataURL('image/jpeg', 0.8);
-                callback(compressedImage);
-            };
-            
-            img.src = e.target.result;
-        };
-        
-        reader.readAsDataURL(file);
-    }
-
-    // Process avatar images with circular crop
-    function processAvatarUpload(file, callback) {
-        if (!file.type.startsWith('image/')) {
-            alert('请选择图片文件');
-            return;
-        }
-        
-        if (file.size > 5 * 1024 * 1024) {
-            alert('图片大小不能超过5MB');
-            return;
-        }
-        
-        const reader = new FileReader();
-        reader.onload = function(e) {
-            const img = new Image();
-            img.onload = function() {
-                const canvas = document.createElement('canvas');
-                const ctx = canvas.getContext('2d');
-                
-                // Set avatar size (square)
-                const avatarSize = 400;
-                canvas.width = avatarSize;
-                canvas.height = avatarSize;
-                
-                // Calculate crop dimensions to get center square
-                let sourceX = 0;
-                let sourceY = 0;
-                let sourceWidth = img.width;
-                let sourceHeight = img.height;
-                
-                if (img.width > img.height) {
-                    // Landscape image - crop from center
-                    sourceWidth = img.height;
-                    sourceX = (img.width - img.height) / 2;
-                } else if (img.height > img.width) {
-                    // Portrait image - crop from center
-                    sourceHeight = img.width;
-                    sourceY = (img.height - img.width) / 2;
-                }
-                
-                // Draw circular mask
-                ctx.fillStyle = '#f0f0f0';
-                ctx.fillRect(0, 0, avatarSize, avatarSize);
-                
-                ctx.save();
-                ctx.beginPath();
-                ctx.arc(avatarSize / 2, avatarSize / 2, avatarSize / 2, 0, Math.PI * 2);
-                ctx.clip();
-                
-                // Draw and center the image
-                ctx.drawImage(img, sourceX, sourceY, sourceWidth, sourceHeight, 0, 0, avatarSize, avatarSize);
-                
-                ctx.restore();
-                
-                // Add subtle border
-                ctx.beginPath();
-                ctx.arc(avatarSize / 2, avatarSize / 2, avatarSize / 2 - 2, 0, Math.PI * 2);
-                ctx.strokeStyle = 'rgba(255, 255, 255, 0.8)';
-                ctx.lineWidth = 4;
-                ctx.stroke();
-                
-                const compressedImage = canvas.toDataURL('image/png', 0.9);
-                callback(compressedImage);
-            };
-            
-            img.src = e.target.result;
-        };
-        
-        reader.readAsDataURL(file);
-    }
-
     function handleStoryImageUpload(event) {
         const files = event.target.files;
         const previewContainer = document.getElementById('storyImagesPreview');
         
         Array.from(files).forEach(file => {
-            if (!file.type.startsWith('image/')) return;
-            if (file.size > 5 * 1024 * 1024) return;
-            
-            processImageUpload(file, (compressedImage) => {
+            ImageManager.processImageFile(file).then(compressedImage => {
                 storyImagesToUpload.push(compressedImage);
-                
-                const imgDiv = document.createElement('div');
-                imgDiv.className = 'relative group';
-                imgDiv.innerHTML = `
-                    <img src="${compressedImage}" alt="${file.name}" class="w-full h-20 object-cover rounded-lg">
-                    <div class="absolute bottom-0 left-0 right-0 bg-black/60 text-white text-xs px-2 py-1 truncate">
-                        ${file.name}
-                    </div>
-                    <button type="button" onclick="removeStoryImagePreview(${storyImagesToUpload.length - 1})" 
-                            class="absolute top-1 right-1 bg-red-500 text-white p-1 rounded-full opacity-0 group-hover:opacity-100 transition-opacity">
-                        <i class="fa fa-times text-xs"></i>
-                    </button>
-                `;
-                previewContainer.appendChild(imgDiv);
-                
+                ImageManager.renderPreview(storyImagesToUpload, 'storyImagesPreview', 'removeStoryImagePreview', true, file.name);
                 showNotification('图片已添加，点击保存后生效！', 'info');
-            });
+            }).catch(() => {});
         });
         
         // Clear input for next upload
@@ -6137,25 +6566,7 @@
     }
 
     function removeStoryImagePreview(index) {
-        if (confirm('确定要删除这张图片吗？')) {
-            storyImagesToUpload.splice(index, 1);
-            
-            const previewContainer = document.getElementById('storyImagesPreview');
-            previewContainer.innerHTML = '';
-            
-            storyImagesToUpload.forEach((img, i) => {
-                const imgDiv = document.createElement('div');
-                imgDiv.className = 'relative group';
-                imgDiv.innerHTML = `
-                    <img src="${img}" alt="故事图片 ${i + 1}" class="w-full h-20 object-cover rounded-lg">
-                    <button type="button" onclick="removeStoryImagePreview(${i})" 
-                            class="absolute top-1 right-1 bg-red-500 text-white p-1 rounded-full opacity-0 group-hover:opacity-100 transition-opacity">
-                        <i class="fa fa-times text-xs"></i>
-                    </button>
-                `;
-                previewContainer.appendChild(imgDiv);
-            });
-        }
+        removePreviewImage(storyImagesToUpload, 'storyImagesPreview', 'removeStoryImagePreview', index);
     }
 
     function handleAddMemberStoryImageUpload(event) {
@@ -6163,53 +6574,18 @@
         const previewContainer = document.getElementById('memberStoryImagesPreview');
         
         Array.from(files).forEach(file => {
-            if (!file.type.startsWith('image/')) return;
-            if (file.size > 5 * 1024 * 1024) return;
-            
-            processImageUpload(file, (compressedImage) => {
+            ImageManager.processImageFile(file).then(compressedImage => {
                 addMemberStoryImages.push(compressedImage);
-                
-                const imgDiv = document.createElement('div');
-                imgDiv.className = 'relative group';
-                imgDiv.innerHTML = `
-                    <img src="${compressedImage}" alt="${file.name}" class="w-full h-20 object-cover rounded-lg">
-                    <div class="absolute bottom-0 left-0 right-0 bg-black/60 text-white text-xs px-2 py-1 truncate">
-                        ${file.name}
-                    </div>
-                    <button type="button" onclick="removeAddMemberStoryImagePreview(${addMemberStoryImages.length - 1})" 
-                            class="absolute top-1 right-1 bg-red-500 text-white p-1 rounded-full opacity-0 group-hover:opacity-100 transition-opacity">
-                        <i class="fa fa-times text-xs"></i>
-                    </button>
-                `;
-                previewContainer.appendChild(imgDiv);
-                
+                ImageManager.renderPreview(addMemberStoryImages, 'memberStoryImagesPreview', 'removeAddMemberStoryImagePreview', true, file.name);
                 showNotification('图片已添加，点击保存后生效！', 'info');
-            });
+            }).catch(() => {});
         });
         
         event.target.value = '';
     }
 
     function removeAddMemberStoryImagePreview(index) {
-        if (confirm('确定要删除这张图片吗？')) {
-            addMemberStoryImages.splice(index, 1);
-            
-            const previewContainer = document.getElementById('memberStoryImagesPreview');
-            previewContainer.innerHTML = '';
-            
-            addMemberStoryImages.forEach((img, i) => {
-                const imgDiv = document.createElement('div');
-                imgDiv.className = 'relative group';
-                imgDiv.innerHTML = `
-                    <img src="${img}" alt="故事图片 ${i + 1}" class="w-full h-20 object-cover rounded-lg">
-                    <button type="button" onclick="removeAddMemberStoryImagePreview(${i})" 
-                            class="absolute top-1 right-1 bg-red-500 text-white p-1 rounded-full opacity-0 group-hover:opacity-100 transition-opacity">
-                        <i class="fa fa-times text-xs"></i>
-                    </button>
-                `;
-                previewContainer.appendChild(imgDiv);
-            });
-        }
+        removePreviewImage(addMemberStoryImages, 'memberStoryImagesPreview', 'removeAddMemberStoryImagePreview', index);
     }
 
     function handleAvatarPreview(event) {
@@ -6229,7 +6605,8 @@
         
         if (confirm('确定要删除这张图片吗？')) {
             member.storyImages.splice(index, 1);
-            member.updatedAt = Date.now(); // Update edit time
+            member.updatedAt = Date.now();
+            
             saveFamilyData();
             showMemberDetails(memberId);
             renderStories();
@@ -6237,14 +6614,13 @@
         }
     }
     
-    // Set story cover image function
     function setStoryCoverImage(memberId, imageIndex) {
         const member = familyData.find(m => m.id === memberId);
         if (!member || !member.storyImages || imageIndex === 0) return;
         
         const image = member.storyImages.splice(imageIndex, 1)[0];
         member.storyImages.unshift(image);
-        member.updatedAt = Date.now(); // Update edit time
+        member.updatedAt = Date.now();
         
         saveFamilyData();
         showMemberDetails(memberId);
@@ -6252,35 +6628,12 @@
         showNotification('封面设置成功！', 'success');
     }
     
-    // Set task cover image function
     function setTaskCoverImage(taskId, imageIndex) {
-        const task = tasks.find(t => t.id === taskId);
-        if (!task || !task.images || imageIndex === 0) return;
-        
-        const image = task.images.splice(imageIndex, 1)[0];
-        task.images.unshift(image);
-        task.updatedAt = Date.now(); // Update edit time
-        
-        saveTasks();
-        showTaskDetail(taskId);
-        renderTasks();
-        showNotification('封面设置成功！', 'success');
+        setCoverImage(tasks, taskId, imageIndex, saveTasks, renderTasks, showTaskDetail);
     }
     
-    // Delete task image
     function deleteTaskImage(taskId, index) {
-        const task = tasks.find(t => t.id === taskId);
-        if (!task || !task.images || !task.images[index]) return;
-        
-        if (confirm('确定要删除这张图片吗？')) {
-            task.images.splice(index, 1);
-            task.updatedAt = Date.now(); // Update edit time
-            
-            saveTasks();
-            showTaskDetail(taskId);
-            renderTasks();
-            showNotification('图片删除成功！', 'success');
-        }
+        deleteImage(tasks, taskId, index, saveTasks, renderTasks, showTaskDetail);
     }
     
     // Toggle task hidden status
@@ -6420,19 +6773,18 @@
         // 显示添加成员模态框
         toggleAddMemberModal();
         
-        // 使用setTimeout确保在populateParentOptions完成后再设置父母ID
+        // 使用setTimeout确保在toggleAddMemberModal完成后再设置父母ID
         setTimeout(() => {
             // 设置父元素ID
-            const parentSelect = document.getElementById('memberParent');
-            parentSelect.value = parentId;
+            document.getElementById('memberParent').value = parentId;
             
-            // 禁用父元素选择器，防止用户更改
-            parentSelect.disabled = true;
+            // 显示已选择的父母
+            renderSelectedParents([parentId]);
             
-            // 添加提示信息
-            const existingLabel = parentSelect.previousElementSibling;
-            if (existingLabel && existingLabel.tagName === 'LABEL') {
-                existingLabel.innerHTML = `关联父母（已自动设置为 ${parent.name}）`;
+            // 更新标签
+            const parentLabel = document.querySelector('label[for="memberParentSearch"]');
+            if (parentLabel) {
+                parentLabel.innerHTML = `关联父母（已自动设置为 ${parent.name}）`;
             }
             
             // 聚焦到姓名输入框
@@ -6514,368 +6866,45 @@
         }
     }
 
-    // Zoom and pan variables
-    let isDragging = false;
-    let startX, startY;
-    let translateX = 0;
-    let translateY = 0;
-    let currentScale = 1;
+    // Zoom and pan manager for family tree
+    const familyTreeZoomPan = new ZoomPanManager('familyTreeContainer', {
+        zoomLevelId: 'zoomLevel',
+        minScale: 0.01,
+        maxScale: 10,
+        enableKeyboard: true,
+        enableScrollIndicators: true,
+        scrollAmount: 50,
+        scrollIndicators: {
+            top: 'scrollTopIndicator',
+            bottom: 'scrollBottomIndicator',
+            left: 'scrollLeftIndicator',
+            right: 'scrollRightIndicator'
+        },
+        resizeHandler: fitToScreen
+    });
 
     // Initialize zoom and pan functionality
     function initializeZoomAndPan() {
-        const container = document.getElementById('familyTreeContainer');
-        const canvasContainer = container.parentElement;
-
-        // Mouse wheel zoom
-        canvasContainer.addEventListener('wheel', handleWheelZoom);
-
-        // Mouse drag to pan
-        container.addEventListener('mousedown', startDrag);
-        document.addEventListener('mousemove', drag);
-        document.addEventListener('mouseup', endDrag);
-
-        // Touch events for mobile
-        container.addEventListener('touchstart', handleTouchStart, { passive: false });
-        container.addEventListener('touchmove', handleTouchMove, { passive: false });
-        container.addEventListener('touchend', handleTouchEnd);
-
-        // Keyboard navigation
-        document.addEventListener('keydown', handleKeyNavigation);
-
-        // Scroll indicators
-        canvasContainer.addEventListener('scroll', updateScrollIndicators);
-
-        // Window resize handler
-        window.addEventListener('resize', fitToScreen);
-    }
-
-    // Mouse wheel zoom
-    function handleWheelZoom(e) {
-        e.preventDefault();
-        
-        const canvasContainer = document.getElementById('familyTreeContainer').parentElement;
-        const rect = canvasContainer.getBoundingClientRect();
-        const mouseX = e.clientX - rect.left;
-        const mouseY = e.clientY - rect.top;
-        
-        const scaleFactor = e.deltaY > 0 ? 0.9 : 1.1;
-        const newScale = Math.max(0.1, Math.min(3, currentScale * scaleFactor));
-        
-        if (newScale !== currentScale) {
-            const newTranslateX = mouseX - (mouseX - translateX) * newScale / currentScale;
-            const newTranslateY = mouseY - (mouseY - translateY) * newScale / currentScale;
-            
-            currentScale = newScale;
-            translateX = newTranslateX;
-            translateY = newTranslateY;
-            updateTransform();
-        }
-    }
-
-    // Drag to pan
-    function startDrag(e) {
-        if (e.button === 0) { // Left mouse button
-            isDragging = true;
-            startX = e.clientX - translateX;
-            startY = e.clientY - translateY;
-            document.body.style.cursor = 'grabbing';
-        }
-    }
-
-    function drag(e) {
-        if (!isDragging) return;
-        
-        e.preventDefault();
-        translateX = e.clientX - startX;
-        translateY = e.clientY - startY;
-        updateTransform();
-    }
-
-    function endDrag() {
-        isDragging = false;
-        document.body.style.cursor = 'default';
-    }
-
-    // Touch events
-    let initialDistance = 0;
-    let initialScale = 1;
-    let initialTranslateX = 0;
-    let initialTranslateY = 0;
-    let touchStartX, touchStartY;
-    let lastTouchTime = 0;
-    let lastTouchX = 0;
-    let lastTouchY = 0;
-    let velocityX = 0;
-    let velocityY = 0;
-    let inertiaAnimation = null;
-
-    function handleTouchStart(e) {
-        if (inertiaAnimation) {
-            cancelAnimationFrame(inertiaAnimation);
-            inertiaAnimation = null;
-        }
-        
-        if (e.touches.length === 1) {
-            touchStartX = e.touches[0].clientX - translateX;
-            touchStartY = e.touches[0].clientY - translateY;
-            lastTouchTime = Date.now();
-            lastTouchX = e.touches[0].clientX;
-            lastTouchY = e.touches[0].clientY;
-            velocityX = 0;
-            velocityY = 0;
-        } else if (e.touches.length === 2) {
-            const dx = e.touches[0].clientX - e.touches[1].clientX;
-            const dy = e.touches[0].clientY - e.touches[1].clientY;
-            initialDistance = Math.sqrt(dx * dx + dy * dy);
-            initialScale = currentScale;
-            initialTranslateX = translateX;
-            initialTranslateY = translateY;
-        }
-    }
-
-    function handleTouchMove(e) {
-        e.preventDefault();
-        
-        if (e.touches.length === 1 && !initialDistance) {
-            const currentX = e.touches[0].clientX;
-            const currentY = e.touches[0].clientY;
-            const currentTime = Date.now();
-            const deltaTime = currentTime - lastTouchTime;
-            
-            if (deltaTime > 0) {
-                velocityX = (currentX - lastTouchX) / deltaTime;
-                velocityY = (currentY - lastTouchY) / deltaTime;
-            }
-            
-            lastTouchTime = currentTime;
-            lastTouchX = currentX;
-            lastTouchY = currentY;
-            
-            translateX = currentX - touchStartX;
-            translateY = currentY - touchStartY;
-            updateTransform();
-        } else if (e.touches.length === 2) {
-            const canvasContainer = document.getElementById('familyTreeContainer').parentElement;
-            const rect = canvasContainer.getBoundingClientRect();
-            
-            const dx = e.touches[0].clientX - e.touches[1].clientX;
-            const dy = e.touches[0].clientY - e.touches[1].clientY;
-            const distance = Math.sqrt(dx * dx + dy * dy);
-            
-            if (initialDistance > 0) {
-                const scaleFactor = distance / initialDistance;
-                const newScale = Math.max(0.1, Math.min(3, initialScale * scaleFactor));
-                
-                if (newScale !== currentScale) {
-                    const centerX = (e.touches[0].clientX + e.touches[1].clientX) / 2 - rect.left;
-                    const centerY = (e.touches[0].clientY + e.touches[1].clientY) / 2 - rect.top;
-                    
-                    const newTranslateX = centerX - (centerX - initialTranslateX) * newScale / initialScale;
-                    const newTranslateY = centerY - (centerY - initialTranslateY) * newScale / initialScale;
-                    
-                    currentScale = newScale;
-                    translateX = newTranslateX;
-                    translateY = newTranslateY;
-                    updateTransform();
-                }
-            }
-        } else if (e.touches.length === 1 && initialDistance > 0) {
-            initialDistance = 0;
-            touchStartX = e.touches[0].clientX - translateX;
-            touchStartY = e.touches[0].clientY - translateY;
-            lastTouchTime = Date.now();
-            lastTouchX = e.touches[0].clientX;
-            lastTouchY = e.touches[0].clientY;
-            velocityX = 0;
-            velocityY = 0;
-        }
-    }
-
-    function handleTouchEnd(e) {
-        if (e.touches.length === 0) {
-            initialDistance = 0;
-            
-            const speed = Math.sqrt(velocityX * velocityX + velocityY * velocityY);
-            if (speed > 0.1) {
-                startInertia();
-            }
-        } else if (e.touches.length === 1) {
-            initialDistance = 0;
-            touchStartX = e.touches[0].clientX - translateX;
-            touchStartY = e.touches[0].clientY - translateY;
-            lastTouchTime = Date.now();
-            lastTouchX = e.touches[0].clientX;
-            lastTouchY = e.touches[0].clientY;
-            velocityX = 0;
-            velocityY = 0;
-        }
-    }
-
-    function startInertia() {
-        const friction = 0.95;
-        const minSpeed = 0.1;
-        
-        function animate() {
-            velocityX *= friction;
-            velocityY *= friction;
-            
-            const speed = Math.sqrt(velocityX * velocityX + velocityY * velocityY);
-            
-            if (speed > minSpeed) {
-                translateX += velocityX * 16;
-                translateY += velocityY * 16;
-                updateTransform();
-                inertiaAnimation = requestAnimationFrame(animate);
-            } else {
-                inertiaAnimation = null;
-            }
-        }
-        
-        inertiaAnimation = requestAnimationFrame(animate);
-    }
-
-    // Keyboard navigation
-    function handleKeyNavigation(e) {
-        const container = document.getElementById('familyTreeContainer').parentElement;
-        const scrollAmount = 50;
-        
-        switch(e.key) {
-            case 'ArrowUp':
-                e.preventDefault();
-                container.scrollTop -= scrollAmount;
-                break;
-            case 'ArrowDown':
-                e.preventDefault();
-                container.scrollTop += scrollAmount;
-                break;
-            case 'ArrowLeft':
-                e.preventDefault();
-                container.scrollLeft -= scrollAmount;
-                break;
-            case 'ArrowRight':
-                e.preventDefault();
-                container.scrollLeft += scrollAmount;
-                break;
-            case 'Home':
-                e.preventDefault();
-                container.scrollTop = 0;
-                container.scrollLeft = 0;
-                break;
-            case 'End':
-                e.preventDefault();
-                container.scrollTop = container.scrollHeight;
-                container.scrollLeft = container.scrollWidth;
-                break;
-        }
-    }
-
-    // Update scroll indicators
-    function updateScrollIndicators() {
-        const container = document.getElementById('familyTreeContainer').parentElement;
-        
-        // Top indicator
-        const topIndicator = document.getElementById('scrollTopIndicator');
-        topIndicator.style.opacity = container.scrollTop > 50 ? '1' : '0';
-        
-        // Bottom indicator
-        const bottomIndicator = document.getElementById('scrollBottomIndicator');
-        bottomIndicator.style.opacity = (container.scrollHeight - container.scrollTop - container.clientHeight) > 50 ? '1' : '0';
-        
-        // Left indicator
-        const leftIndicator = document.getElementById('scrollLeftIndicator');
-        leftIndicator.style.opacity = container.scrollLeft > 50 ? '1' : '0';
-        
-        // Right indicator
-        const rightIndicator = document.getElementById('scrollRightIndicator');
-        rightIndicator.style.opacity = (container.scrollWidth - container.scrollLeft - container.clientWidth) > 50 ? '1' : '0';
-    }
-
-    // Update transform
-    function updateTransform() {
-        const container = document.getElementById('familyTreeContainer');
-        container.style.transform = `translate(${translateX}px, ${translateY}px) scale(${currentScale})`;
-        
-        // Update zoom level display
-        document.getElementById('zoomLevel').textContent = `${Math.round(currentScale * 100)}%`;
+        familyTreeZoomPan.init();
     }
 
     // Fit family tree to screen (height only)
     function fitToScreen() {
-        const familyTreeContainer = document.getElementById('familyTreeContainer');
-        const canvasContainer = familyTreeContainer.parentElement;
-        
-        if (!familyTreeContainer || !canvasContainer) return;
-        
-        const contentWidth = familyTreeContainer.scrollWidth;
-        const contentHeight = familyTreeContainer.scrollHeight;
-        const containerWidth = canvasContainer.clientWidth;
-        const containerHeight = canvasContainer.clientHeight;
-        
-        if (contentHeight === 0) return;
-        
-        const fitScale = (containerHeight / contentHeight) * 0.95;
-        
-        currentScale = Math.max(0.1, Math.min(3, fitScale));
-        translateX = (containerWidth - contentWidth * currentScale) / 2;
-        translateY = (containerHeight - contentHeight * currentScale) / 2;
-        
-        updateTransform();
+        familyTreeZoomPan.fitToScreen(false);
     }
 
     // Fit family tree to screen (full view - both width and height)
     function fitToScreenFull() {
-        const familyTreeContainer = document.getElementById('familyTreeContainer');
-        const canvasContainer = familyTreeContainer.parentElement;
-        
-        if (!familyTreeContainer || !canvasContainer) return;
-        
-        const contentWidth = familyTreeContainer.scrollWidth;
-        const contentHeight = familyTreeContainer.scrollHeight;
-        const containerWidth = canvasContainer.clientWidth;
-        const containerHeight = canvasContainer.clientHeight;
-        
-        if (contentWidth === 0 || contentHeight === 0) return;
-        
-        const scaleX = containerWidth / contentWidth;
-        const scaleY = containerHeight / contentHeight;
-        const fitScale = Math.min(scaleX, scaleY) * 0.9;
-        
-        currentScale = Math.max(0.1, Math.min(3, fitScale));
-        translateX = (containerWidth - contentWidth * currentScale) / 2;
-        translateY = (containerHeight - contentHeight * currentScale) / 2;
-        
-        updateTransform();
+        familyTreeZoomPan.fitToScreen(true);
     }
 
     // Zoom functions
     function zoomIn() {
-        const canvasContainer = document.getElementById('familyTreeContainer').parentElement;
-        const centerX = canvasContainer.clientWidth / 2;
-        const centerY = canvasContainer.clientHeight / 2;
-        const newScale = Math.min(3, currentScale * 1.1);
-        if (newScale !== currentScale) {
-            const newTranslateX = centerX - (centerX - translateX) * newScale / currentScale;
-            const newTranslateY = centerY - (centerY - translateY) * newScale / currentScale;
-            currentScale = newScale;
-            translateX = newTranslateX;
-            translateY = newTranslateY;
-            updateTransform();
-        }
+        familyTreeZoomPan.zoomIn();
     }
 
     function zoomOut() {
-        const canvasContainer = document.getElementById('familyTreeContainer').parentElement;
-        const centerX = canvasContainer.clientWidth / 2;
-        const centerY = canvasContainer.clientHeight / 2;
-        const newScale = Math.max(0.1, currentScale * 0.9);
-        if (newScale !== currentScale) {
-            const newTranslateX = centerX - (centerX - translateX) * newScale / currentScale;
-            const newTranslateY = centerY - (centerY - translateY) * newScale / currentScale;
-            currentScale = newScale;
-            translateX = newTranslateX;
-            translateY = newTranslateY;
-            updateTransform();
-        }
+        familyTreeZoomPan.zoomOut();
     }
 
     function zoomReset() {
@@ -7093,12 +7122,10 @@
     let selectedBatchColor = '#FF8A80';
     let selectedBatchMembers = [];
 
-    // 显示历史标签
-    function displayMemberTagHistory() {
-        const historyContainer = document.getElementById('memberTagHistory');
+    function displayTagHistory(containerId, selectCallback) {
+        const historyContainer = document.getElementById(containerId);
         if (!historyContainer) return;
         
-        // 收集所有已使用的标签及其颜色
         const tagMap = new Map();
         familyData.forEach(member => {
             if (member.tags && member.tags.length > 0) {
@@ -7115,15 +7142,18 @@
             return;
         }
         
-        // 显示历史标签
         historyContainer.innerHTML = Array.from(tagMap.entries()).map(([text, color]) => `
-            <button type="button" onclick="selectMemberTagHistory('${text}', '${color}')" 
+            <button type="button" onclick="${selectCallback}('${text}', '${color}')" 
                     class="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium cursor-pointer transition-all hover:opacity-80"
                     style="background-color: ${color}20; color: #000000; border: 1px solid ${color}40;">
                 <span class="w-2 h-2 rounded-full mr-1" style="background-color: ${color}"></span>
                 ${text}
             </button>
         `).join('');
+    }
+
+    function displayMemberTagHistory() {
+        displayTagHistory('memberTagHistory', 'selectMemberTagHistory');
     }
     
     // 选择历史标签（添加成员模态框）
@@ -7140,37 +7170,8 @@
         });
     }
     
-    // 显示历史标签（编辑标签模态框）
     function displayEditTagHistory() {
-        const historyContainer = document.getElementById('editTagHistory');
-        if (!historyContainer) return;
-        
-        // 收集所有已使用的标签及其颜色
-        const tagMap = new Map();
-        familyData.forEach(member => {
-            if (member.tags && member.tags.length > 0) {
-                member.tags.forEach(tag => {
-                    if (!tagMap.has(tag.text)) {
-                        tagMap.set(tag.text, tag.color);
-                    }
-                });
-            }
-        });
-        
-        if (tagMap.size === 0) {
-            historyContainer.innerHTML = '<p class="text-xs text-gray-500">暂无历史标签</p>';
-            return;
-        }
-        
-        // 显示历史标签
-        historyContainer.innerHTML = Array.from(tagMap.entries()).map(([text, color]) => `
-            <button type="button" onclick="selectEditTagHistory('${text}', '${color}')" 
-                    class="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium cursor-pointer transition-all hover:opacity-80"
-                    style="background-color: ${color}20; color: #000000; border: 1px solid ${color}40;">
-                <span class="w-2 h-2 rounded-full mr-1" style="background-color: ${color}"></span>
-                ${text}
-            </button>
-        `).join('');
+        displayTagHistory('editTagHistory', 'selectEditTagHistory');
     }
     
     // 选择历史标签（编辑标签模态框）
@@ -7187,37 +7188,8 @@
         });
     }
 
-    // 显示历史标签
     function displayBatchTagHistory() {
-        const historyContainer = document.getElementById('batchTagHistory');
-        if (!historyContainer) return;
-        
-        // 收集所有已使用的标签及其颜色
-        const tagMap = new Map();
-        familyData.forEach(member => {
-            if (member.tags && member.tags.length > 0) {
-                member.tags.forEach(tag => {
-                    if (!tagMap.has(tag.text)) {
-                        tagMap.set(tag.text, tag.color);
-                    }
-                });
-            }
-        });
-        
-        if (tagMap.size === 0) {
-            historyContainer.innerHTML = '<p class="text-xs text-gray-500">暂无历史标签</p>';
-            return;
-        }
-        
-        // 显示历史标签
-        historyContainer.innerHTML = Array.from(tagMap.entries()).map(([text, color]) => `
-            <button type="button" onclick="selectBatchTagHistory('${text}', '${color}')" 
-                    class="inline-flex items-center px-2 py-1 rounded-full text-xs font-medium cursor-pointer transition-all hover:opacity-80"
-                    style="background-color: ${color}20; color: #000000; border: 1px solid ${color}40;">
-                <span class="w-2 h-2 rounded-full mr-1" style="background-color: ${color}"></span>
-                ${text}
-            </button>
-        `).join('');
+        displayTagHistory('batchTagHistory', 'selectBatchTagHistory');
     }
     
     // 选择历史标签
@@ -7286,36 +7258,13 @@
 
     // 处理批量成员搜索
     function handleBatchMemberSearch(e) {
-        const searchTerm = e.target.value.toLowerCase();
-        const resultsContainer = document.getElementById('batchSearchResults');
-        
-        if (!searchTerm) {
-            resultsContainer.innerHTML = '';
-            return;
-        }
-        
-        // 搜索家族内成员
-        const familyMembers = familyData.filter(member => 
-            member.isFamilyMember && 
-            member.name.toLowerCase().includes(searchTerm)
-        );
-        
-        if (familyMembers.length === 0) {
-            resultsContainer.innerHTML = '<p class="text-gray-500 text-sm">未找到匹配成员</p>';
-            return;
-        }
-        
-        // 显示搜索结果
-        resultsContainer.innerHTML = familyMembers.map(member => `
-            <div class="flex items-center gap-3 p-2 hover:bg-gray-200 rounded-md cursor-pointer transition-colors"
-                 onclick="selectBatchMember(${member.id})">
-                <img src="${member.image}" alt="${member.name}" class="w-10 h-10 rounded-full object-cover border-2 border-white shadow">
-                <div>
-                    <h5 class="font-medium text-gray-800">${member.name}</h5>
-                    <p class="text-xs text-gray-500">${member.birthDate}${member.deathDate ? ` - ${member.deathDate}` : ''}</p>
-                </div>
-            </div>
-        `).join('');
+        searchMembers({
+            searchInputId: 'batchSearchInput',
+            resultsContainerId: 'batchSearchResults',
+            onSelect: 'selectBatchMember',
+            showBirthDate: true,
+            filterFn: member => member.isFamilyMember
+        });
     }
 
     // 选择批量成员
@@ -7408,11 +7357,13 @@
 
     // 更新日志功能
     const updateLog = [
+        { version: 'V110', date: '2026-07-07', changes: ['细微功能调整'] },
+        { version: 'V109', date: '2026-07-05', changes: ['代码优化'] },
         { version: 'V108', date: '2026-07-02', changes: ['优化数据存储方式'] },
         { version: 'V107', date: '2026-07-01', changes: ['优化家族树拖拽'] },
         { version: 'V106', date: '2026-06-25', changes: ['优化成员详情'] },
         { version: 'V105', date: '2026-06-25', changes: ['优化图片上传'] },
-        { version: 'V104', date: '2026-06-25', changes: ['添加活动模块'] },
+        { version: 'V104', date: '2026-06-24', changes: ['添加活动模块'] },
         { version: 'V103', date: '2026-06-24', changes: ['添加任务模块'] },
         { version: 'V104.1', date: '2026-06-23', changes: ['优化：家族故事模块下的成员档案卡片布局，采用与任务模块相似的卡片风格', '新增：顶部通栏封面区域（h-32高度），支持显示故事图片/标签颜色/默认灰色背景', '新增：悬浮圆形头像（80x80px），一半嵌入封面、一半垂入白色内容区', '优化：姓名、出生时间横向排布在头像右侧，性别标签右对齐', '优化：标签栏单行显示，最多3个标签', '优化：故事简介最多显示2行，超出省略', '优化：底部仅保留「阅读更多」按钮', '修复：成员卡片点击无响应问题（TypeError: Cannot set properties of null）'] },
         { version: 'V103.5', date: '2026-06-22', changes: ['修复：任务编辑中的图片上传功能，添加了事件监听器和处理函数', '优化：上传的图片删除功能添加了二次确认，防止误删除', '编辑任务时可以正常上传新图片并预览'] },
@@ -7518,256 +7469,66 @@
     // ==================== Task Panel Functions ====================
     
     // Load tasks from storage
+    const tasksStorage = new StorageManager({
+        storageKey: 'familyTreeTasks',
+        indexedDBStore: 'tasks',
+        backupVar: null,
+        refreshFn: renderTasks,
+        errorMessage: '存储空间不足，请删除一些任务图片'
+    });
+
     async function loadTasks() {
         try {
-            if (storageMode === 'indexedDB' && db) {
-                tasks = await loadTasksFromIndexedDB();
-            } else {
-                const saved = localStorage.getItem('familyTreeTasks');
-                if (saved) {
-                    tasks = JSON.parse(saved);
-                } else {
-                    tasks = [];
-                }
-            }
+            let loadedTasks = await tasksStorage.load(tasks);
+            loadedTasks.sort((a, b) => {
+                if (a.pinned && !b.pinned) return -1;
+                if (!a.pinned && b.pinned) return 1;
+                const aCompleted = isTaskCompleted(a);
+                const bCompleted = isTaskCompleted(b);
+                if (aCompleted && !bCompleted) return 1;
+                if (!aCompleted && bCompleted) return -1;
+                return (b.createdAt || 0) - (a.createdAt || 0);
+            });
+            tasks = loadedTasks;
         } catch (e) {
             console.error('Failed to load tasks:', e);
             tasks = [];
         }
     }
     
-    // Load tasks from IndexedDB
-    function loadTasksFromIndexedDB() {
-        return new Promise((resolve, reject) => {
-            try {
-                const transaction = db.transaction(['tasks'], 'readonly');
-                const store = transaction.objectStore('tasks');
-                const request = store.getAll();
-                
-                request.onsuccess = (event) => {
-                    const loadedTasks = event.target.result || [];
-                    loadedTasks.sort((a, b) => {
-                        if (a.pinned && !b.pinned) return -1;
-                        if (!a.pinned && b.pinned) return 1;
-                        const aCompleted = isTaskCompleted(a);
-                        const bCompleted = isTaskCompleted(b);
-                        if (aCompleted && !bCompleted) return 1;
-                        if (!aCompleted && bCompleted) return -1;
-                        return (b.createdAt || 0) - (a.createdAt || 0);
-                    });
-                    resolve(loadedTasks);
-                };
-                
-                request.onerror = (event) => {
-                    console.error('Error loading tasks from IndexedDB:', event.target.error);
-                    reject(event.target.error);
-                };
-            } catch (error) {
-                console.error('Error in loadTasksFromIndexedDB:', error);
-                reject(error);
-            }
-        });
-    }
-    
+    const activitiesStorage = new StorageManager({
+        storageKey: 'familyTreeActivities',
+        indexedDBStore: 'activities',
+        backupVar: null,
+        refreshFn: renderActivities,
+        errorMessage: '存储空间不足，请删除一些活动图片'
+    });
+
     // Load activities from storage
     async function loadActivities() {
         try {
-            if (storageMode === 'indexedDB' && db) {
-                activities = await loadActivitiesFromIndexedDB();
-            } else {
-                const saved = localStorage.getItem('familyTreeActivities');
-                if (saved) {
-                    activities = JSON.parse(saved);
-                } else {
-                    activities = [];
-                }
-            }
+            let loadedActivities = await activitiesStorage.load(activities);
+            loadedActivities.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
+            activities = loadedActivities;
         } catch (e) {
             console.error('Failed to load activities:', e);
             activities = [];
         }
     }
     
-    // Load activities from IndexedDB
-    function loadActivitiesFromIndexedDB() {
-        return new Promise((resolve, reject) => {
-            try {
-                const transaction = db.transaction(['activities'], 'readonly');
-                const store = transaction.objectStore('activities');
-                const request = store.getAll();
-                
-                request.onsuccess = (event) => {
-                    const loadedActivities = event.target.result || [];
-                    loadedActivities.sort((a, b) => (b.createdAt || 0) - (a.createdAt || 0));
-                    resolve(loadedActivities);
-                };
-                
-                request.onerror = (event) => {
-                    console.error('Error loading activities from IndexedDB:', event.target.error);
-                    reject(event.target.error);
-                };
-            } catch (error) {
-                console.error('Error in loadActivitiesFromIndexedDB:', error);
-                reject(error);
-            }
-        });
-    }
-    
     // Save tasks to storage
     async function saveTasks() {
-        try {
-            backupTasks = JSON.parse(JSON.stringify(tasks));
-            
-            if (storageMode === 'indexedDB' && db) {
-                await saveTasksToIndexedDB();
-            } else {
-                localStorage.setItem('familyTreeTasks', JSON.stringify(tasks));
-            }
-        } catch (e) {
-            console.error('Failed to save tasks:', e);
-            
-            if (backupTasks.length > 0) {
-                tasks = JSON.parse(JSON.stringify(backupTasks));
-                renderTasks();
-            }
-            
-            if (e.name === 'QuotaExceededError') {
-                showNotification('存储空间不足，请删除一些任务图片', 'error');
-            }
-        }
+        tasksStorage.options.backupVar = backupTasks;
+        await tasksStorage.save(tasks);
     }
     
     // Save activities to storage
     async function saveActivities() {
-        try {
-            backupActivities = JSON.parse(JSON.stringify(activities));
-            
-            if (storageMode === 'indexedDB' && db) {
-                await saveActivitiesToIndexedDB();
-            } else {
-                localStorage.setItem('familyTreeActivities', JSON.stringify(activities));
-            }
-        } catch (e) {
-            console.error('Failed to save activities:', e);
-            
-            if (backupActivities.length > 0) {
-                activities = JSON.parse(JSON.stringify(backupActivities));
-                renderActivities();
-            }
-            
-            if (e.name === 'QuotaExceededError') {
-                showNotification('存储空间不足，请删除一些活动图片', 'error');
-            }
-        }
+        activitiesStorage.options.backupVar = backupActivities;
+        await activitiesStorage.save(activities);
     }
     
-    // Save tasks to IndexedDB
-    function saveTasksToIndexedDB() {
-        return new Promise((resolve, reject) => {
-            try {
-                const transaction = db.transaction(['tasks'], 'readwrite');
-                const store = transaction.objectStore('tasks');
-                
-                let completedOperations = 0;
-                const totalOperations = tasks.length + 1;
-                
-                const checkCompletion = () => {
-                    if (completedOperations >= totalOperations) {
-                        resolve();
-                    }
-                };
-                
-                const clearRequest = store.clear();
-                clearRequest.onsuccess = () => {
-                    completedOperations++;
-                    
-                    tasks.forEach(task => {
-                        const request = store.put(task);
-                        request.onsuccess = () => {
-                            completedOperations++;
-                            checkCompletion();
-                        };
-                        request.onerror = (e) => {
-                            console.error('Error saving task:', e.target.error);
-                            completedOperations++;
-                            checkCompletion();
-                        };
-                    });
-                    
-                    if (tasks.length === 0) {
-                        checkCompletion();
-                    }
-                };
-                
-                clearRequest.onerror = (e) => {
-                    console.error('Error clearing tasks:', e.target.error);
-                    reject(e.target.error);
-                };
-                
-                transaction.onerror = (event) => {
-                    console.error('Tasks transaction error:', event.target.error);
-                    reject(event.target.error);
-                };
-            } catch (error) {
-                console.error('Error in saveTasksToIndexedDB:', error);
-                reject(error);
-            }
-        });
-    }
     
-    // Save activities to IndexedDB
-    function saveActivitiesToIndexedDB() {
-        return new Promise((resolve, reject) => {
-            try {
-                const transaction = db.transaction(['activities'], 'readwrite');
-                const store = transaction.objectStore('activities');
-                
-                let completedOperations = 0;
-                const totalOperations = activities.length + 1;
-                
-                const checkCompletion = () => {
-                    if (completedOperations >= totalOperations) {
-                        resolve();
-                    }
-                };
-                
-                const clearRequest = store.clear();
-                clearRequest.onsuccess = () => {
-                    completedOperations++;
-                    
-                    activities.forEach(activity => {
-                        const request = store.put(activity);
-                        request.onsuccess = () => {
-                            completedOperations++;
-                            checkCompletion();
-                        };
-                        request.onerror = (e) => {
-                            console.error('Error saving activity:', e.target.error);
-                            completedOperations++;
-                            checkCompletion();
-                        };
-                    });
-                    
-                    if (activities.length === 0) {
-                        checkCompletion();
-                    }
-                };
-                
-                clearRequest.onerror = (e) => {
-                    console.error('Error clearing activities:', e.target.error);
-                    reject(e.target.error);
-                };
-                
-                transaction.onerror = (event) => {
-                    console.error('Activities transaction error:', event.target.error);
-                    reject(event.target.error);
-                };
-            } catch (error) {
-                console.error('Error in saveActivitiesToIndexedDB:', error);
-                reject(error);
-            }
-        });
-    }
     
     // Calculate task progress
     function calculateTaskProgress(task) {
@@ -7872,32 +7633,27 @@
     
     // Toggle Add Task Modal
     function toggleAddTaskModal() {
-        const modal = document.getElementById('addTaskModal');
-        
-        if (modal.classList.contains('hidden')) {
-            modal.classList.remove('hidden');
-            modal.classList.add('flex');
-            document.getElementById('taskName').value = '';
-            document.getElementById('taskDescription').value = '';
-            document.getElementById('taskMemberSearch').value = '';
-            document.getElementById('taskMemberSearchResults').innerHTML = '';
-            document.getElementById('selectedTaskMembers').innerHTML = '';
-            document.getElementById('taskItemsContainer').innerHTML = `
-                <div class="flex items-center gap-2">
-                    <input type="text" class="task-item-input flex-grow border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-pink-500 focus:border-transparent" 
-                           placeholder="输入待办事项">
-                    <button type="button" onclick="addTaskItemRow()" class="px-3 py-2 bg-gray-200 hover:bg-gray-300 rounded-lg text-sm">
-                        <i class="fa fa-plus"></i>
-                    </button>
-                </div>
-            `;
-            document.getElementById('taskImagesUpload').value = '';
-            document.getElementById('taskImagesPreview').innerHTML = '';
-            taskImagesToUpload = [];
-        } else {
-            modal.classList.add('hidden');
-            modal.classList.remove('flex');
-        }
+        toggleModal('addTaskModal', {
+            onShow: () => {
+                document.getElementById('taskName').value = '';
+                document.getElementById('taskDescription').value = '';
+                document.getElementById('taskMemberSearch').value = '';
+                document.getElementById('taskMemberSearchResults').innerHTML = '';
+                document.getElementById('selectedTaskMembers').innerHTML = '';
+                document.getElementById('taskItemsContainer').innerHTML = `
+                    <div class="flex items-center gap-2">
+                        <input type="text" class="task-item-input flex-grow border border-gray-300 rounded-lg px-3 py-2 text-sm focus:ring-2 focus:ring-pink-500 focus:border-transparent" 
+                               placeholder="输入待办事项">
+                        <button type="button" onclick="addTaskItemRow()" class="px-3 py-2 bg-gray-200 hover:bg-gray-300 rounded-lg text-sm">
+                            <i class="fa fa-plus"></i>
+                        </button>
+                    </div>
+                `;
+                document.getElementById('taskImagesUpload').value = '';
+                document.getElementById('taskImagesPreview').innerHTML = '';
+                taskImagesToUpload = [];
+            }
+        });
     }
     
     // Add task item row
@@ -7943,76 +7699,54 @@
     
     // Search task member
     function searchTaskMember() {
-        const searchTerm = document.getElementById('taskMemberSearch').value.toLowerCase();
-        const resultsContainer = document.getElementById('taskMemberSearchResults');
-        const selectedMembers = document.getElementById('selectedTaskMembers');
-        
-        const selectedIds = Array.from(selectedMembers.querySelectorAll('[data-member-id]')).map(el => parseInt(el.dataset.memberId));
-        
-        if (!searchTerm.trim()) {
-            resultsContainer.innerHTML = '';
-            return;
-        }
-        
-        const results = familyData.filter(member => 
-            member.name.toLowerCase().includes(searchTerm)
-        );
-        
-        if (results.length === 0) {
-            resultsContainer.innerHTML = '<p class="text-sm text-gray-500 text-center py-2">未找到匹配的成员</p>';
-            return;
-        }
-        
-        resultsContainer.innerHTML = results.map(member => {
-            const isSelected = selectedIds.includes(member.id);
-            return `
-                <div class="flex items-center p-2 hover:bg-gray-100 rounded-lg cursor-pointer transition-colors"
-                     ${isSelected ? 'style="background-color: #dbeafe;"' : ''}
-                     onclick="toggleTaskMemberSelection(${member.id})">
-                    <img src="${member.image || ''}" alt="${member.name}" class="w-8 h-8 rounded-full object-cover mr-2">
-                    <div>
-                        <span class="text-sm font-medium text-gray-800">${member.name}</span>
-                        <p class="text-xs text-gray-500">${member.birthDate}</p>
-                    </div>
-                    ${isSelected ? '<i class="fa fa-check text-blue-500 ml-auto"></i>' : ''}
-                </div>
-            `;
-        }).join('');
+        searchMembers({
+            searchInputId: 'taskMemberSearch',
+            resultsContainerId: 'taskMemberSearchResults',
+            selectedContainerId: 'selectedTaskMembers',
+            onSelect: 'toggleTaskMemberSelection',
+            showBirthDate: true,
+            showSelection: true
+        });
     }
     
     // Toggle task member selection
     function toggleTaskMemberSelection(memberId) {
-        const member = familyData.find(m => m.id === memberId);
-        if (!member) return;
-        
-        const selectedMembers = document.getElementById('selectedTaskMembers');
-        const existing = selectedMembers.querySelector(`[data-member-id="${memberId}"]`);
-        
-        if (existing) {
-            // Remove if already selected
-            existing.remove();
-        } else {
-            // Add if not selected
-            const memberBadge = document.createElement('div');
-            memberBadge.className = 'flex items-center gap-2 bg-gray-100 px-3 py-2 rounded-full';
-            memberBadge.dataset.memberId = memberId;
-            memberBadge.innerHTML = `
-                <img src="${member.image || ''}" alt="${member.name}" class="w-5 h-5 rounded-full object-cover">
-                <span class="text-sm font-medium">${member.name}</span>
-                <button type="button" onclick="removeTaskMember(${memberId})" class="text-gray-500 hover:text-red-500">
-                    <i class="fa fa-times"></i>
-                </button>
-            `;
-            selectedMembers.appendChild(memberBadge);
-        }
-        
-        // Refresh search results to update selection status
+        toggleMemberSelection(memberId, 'selectedTaskMembers', 'removeTaskMember', 'flex items-center gap-2 bg-gray-100 px-3 py-2 rounded-full', 'w-5 h-5');
         searchTaskMember();
     }
     
     // Remove task member
     function removeTaskMember(memberId) {
-        const selectedMembers = document.getElementById('selectedTaskMembers');
+        removeMember(memberId, 'selectedTaskMembers');
+    }
+    
+    // Generic member selection functions
+    function toggleMemberSelection(memberId, containerId, removeFnName, badgeClass, imgSize) {
+        const member = familyData.find(m => m.id === memberId);
+        if (!member) return;
+        
+        const selectedMembers = document.getElementById(containerId);
+        const existing = selectedMembers.querySelector(`[data-member-id="${memberId}"]`);
+        
+        if (existing) {
+            existing.remove();
+        } else {
+            const memberBadge = document.createElement('div');
+            memberBadge.className = badgeClass;
+            memberBadge.dataset.memberId = memberId;
+            memberBadge.innerHTML = `
+                <img src="${member.image || ''}" alt="${member.name}" class="${imgSize} rounded-full object-cover">
+                <span class="text-sm font-medium">${member.name}</span>
+                <button type="button" onclick="${removeFnName}(${memberId})" class="text-gray-500 hover:text-red-500">
+                    <i class="fa fa-times"></i>
+                </button>
+            `;
+            selectedMembers.appendChild(memberBadge);
+        }
+    }
+    
+    function removeMember(memberId, containerId) {
+        const selectedMembers = document.getElementById(containerId);
         const badge = selectedMembers.querySelector(`[data-member-id="${memberId}"]`);
         if (badge) badge.remove();
     }
@@ -8021,27 +7755,11 @@
     function handleTaskImageUpload(event) {
         const files = event.target.files;
         Array.from(files).forEach(file => {
-            if (!file.type.startsWith('image/')) return;
-            if (file.size > 5 * 1024 * 1024) return;
-            
-            processImageUpload(file, (compressedImage) => {
+            ImageManager.processImageFile(file).then(compressedImage => {
                 taskImagesToUpload.push(compressedImage);
-                
-                // Add to preview
-                const previewContainer = document.getElementById('taskImagesPreview');
-                const imgDiv = document.createElement('div');
-                imgDiv.className = 'relative';
-                imgDiv.innerHTML = `
-                    <img src="${compressedImage}" alt="Task image" class="w-full h-20 object-cover rounded-lg">
-                    <button type="button" onclick="removeTaskImagePreview(${taskImagesToUpload.length - 1})" 
-                            class="absolute top-1 right-1 bg-red-500 text-white p-1 rounded-full opacity-0 hover:opacity-100 transition-opacity">
-                        <i class="fa fa-times text-xs"></i>
-                    </button>
-                `;
-                previewContainer.appendChild(imgDiv);
-                
+                ImageManager.renderPreview(taskImagesToUpload, 'taskImagesPreview', 'removeTaskImagePreview');
                 showNotification('图片已添加，点击保存后生效！', 'info');
-            });
+            }).catch(() => {});
         });
         
         // Clear input for next upload
@@ -8052,27 +7770,11 @@
     function handleEditTaskImageUpload(event) {
         const files = event.target.files;
         Array.from(files).forEach(file => {
-            if (!file.type.startsWith('image/')) return;
-            if (file.size > 5 * 1024 * 1024) return;
-            
-            processImageUpload(file, (compressedImage) => {
+            ImageManager.processImageFile(file).then(compressedImage => {
                 editingTaskImages.push(compressedImage);
-                
-                // Add to preview
-                const previewContainer = document.getElementById('editTaskImagesPreview');
-                const imgDiv = document.createElement('div');
-                imgDiv.className = 'relative';
-                imgDiv.innerHTML = `
-                    <img src="${compressedImage}" alt="Task image" class="w-full h-20 object-cover rounded-lg">
-                    <button type="button" onclick="removeEditTaskImagePreview(${editingTaskImages.length - 1})" 
-                            class="absolute top-1 right-1 bg-red-500 text-white p-1 rounded-full opacity-0 hover:opacity-100 transition-opacity">
-                        <i class="fa fa-times text-xs"></i>
-                    </button>
-                `;
-                previewContainer.appendChild(imgDiv);
-                
+                ImageManager.renderPreview(editingTaskImages, 'editTaskImagesPreview', 'removeEditTaskImagePreview');
                 showNotification('图片已添加，点击保存后生效！', 'info');
-            });
+            }).catch(() => {});
         });
         
         // Clear input for next upload
@@ -8157,10 +7859,10 @@
     function handleAddTask(event) {
         event.preventDefault();
         
-        const name = document.getElementById('taskName').value.trim();
-        const description = document.getElementById('taskDescription').value.trim();
-        const startTime = document.getElementById('taskStartTime').value.trim();
-        const endTime = document.getElementById('taskEndTime').value.trim();
+        const name = Toolkit.getInputValue('taskName');
+        const description = Toolkit.getInputValue('taskDescription');
+        const startTime = Toolkit.getInputValue('taskStartTime');
+        const endTime = Toolkit.getInputValue('taskEndTime');
         
         if (!name) {
             showNotification('请输入任务名称', 'error');
@@ -8354,15 +8056,11 @@
     
     // Toggle Task Detail Modal
     function toggleTaskDetailModal() {
-        const modal = document.getElementById('taskDetailModal');
-        if (modal.classList.contains('hidden')) {
-            modal.classList.remove('hidden');
-            modal.classList.add('flex');
-        } else {
-            modal.classList.add('hidden');
-            modal.classList.remove('flex');
-            currentTaskId = null;
-        }
+        toggleModal('taskDetailModal', {
+            onHide: () => {
+                currentTaskId = null;
+            }
+        });
     }
     
     // Toggle task item complete
@@ -8430,17 +8128,7 @@
     
     // Delete task
     function deleteTask() {
-        if (!currentTaskId) return;
-        
-        if (!confirm('确定要删除这个任务吗？')) {
-            return;
-        }
-        
-        tasks = tasks.filter(t => t.id !== currentTaskId);
-        saveTasks();
-        renderTasks();
-        toggleTaskDetailModal();
-        showNotification('任务已删除', 'info');
+        tasks = deleteItem(currentTaskId, tasks, saveTasks, renderTasks, toggleTaskDetailModal, '任务');
     }
     
     // Get tasks related to a member
@@ -8476,17 +8164,12 @@
     
     // Toggle Edit Task Modal
     function toggleEditTaskModal() {
-        const modal = document.getElementById('editTaskModal');
-        
-        if (modal.classList.contains('hidden')) {
-            modal.classList.remove('hidden');
-            modal.classList.add('flex');
-        } else {
-            modal.classList.add('hidden');
-            modal.classList.remove('flex');
-            editingTaskId = null;
-            editingTaskImages = [];
-        }
+        toggleModal('editTaskModal', {
+            onHide: () => {
+                editingTaskId = null;
+                editingTaskImages = [];
+            }
+        });
     }
     
     // Edit task
@@ -8623,78 +8306,25 @@
     
     // Search edit task member
     function searchEditTaskMember() {
-        const searchTerm = document.getElementById('editTaskMemberSearch').value.toLowerCase();
-        const resultsContainer = document.getElementById('editTaskMemberSearchResults');
-        const selectedMembers = document.getElementById('selectedEditTaskMembers');
-        
-        const selectedIds = Array.from(selectedMembers.querySelectorAll('[data-member-id]')).map(el => parseInt(el.dataset.memberId));
-        
-        if (!searchTerm.trim()) {
-            resultsContainer.innerHTML = '';
-            return;
-        }
-        
-        const results = familyData.filter(member => 
-            member.name.toLowerCase().includes(searchTerm)
-        );
-        
-        if (results.length === 0) {
-            resultsContainer.innerHTML = '<p class="text-sm text-gray-500 text-center py-2">未找到匹配的成员</p>';
-            return;
-        }
-        
-        resultsContainer.innerHTML = results.map(member => {
-            const isSelected = selectedIds.includes(member.id);
-            return `
-                <div class="flex items-center p-2 hover:bg-gray-100 rounded-lg cursor-pointer transition-colors"
-                     ${isSelected ? 'style="background-color: #dbeafe;"' : ''}
-                     onclick="toggleEditTaskMemberSelection(${member.id})">
-                    <img src="${member.image || ''}" alt="${member.name}" class="w-8 h-8 rounded-full object-cover mr-2">
-                    <div>
-                        <span class="text-sm font-medium text-gray-800">${member.name}</span>
-                        <p class="text-xs text-gray-500">${member.birthDate}</p>
-                    </div>
-                    ${isSelected ? '<i class="fa fa-check text-blue-500 ml-auto"></i>' : ''}
-                </div>
-            `;
-        }).join('');
+        searchMembers({
+            searchInputId: 'editTaskMemberSearch',
+            resultsContainerId: 'editTaskMemberSearchResults',
+            selectedContainerId: 'selectedEditTaskMembers',
+            onSelect: 'toggleEditTaskMemberSelection',
+            showBirthDate: true,
+            showSelection: true
+        });
     }
     
     // Toggle edit task member selection
     function toggleEditTaskMemberSelection(memberId) {
-        const member = familyData.find(m => m.id === memberId);
-        if (!member) return;
-        
-        const selectedMembers = document.getElementById('selectedEditTaskMembers');
-        const existing = selectedMembers.querySelector(`[data-member-id="${memberId}"]`);
-        
-        if (existing) {
-            // Remove if already selected
-            existing.remove();
-        } else {
-            // Add if not selected
-            const memberBadge = document.createElement('div');
-            memberBadge.className = 'flex items-center gap-2 bg-gray-100 px-3 py-2 rounded-full';
-            memberBadge.dataset.memberId = memberId;
-            memberBadge.innerHTML = `
-                <img src="${member.image || ''}" alt="${member.name}" class="w-5 h-5 rounded-full object-cover">
-                <span class="text-sm font-medium">${member.name}</span>
-                <button type="button" onclick="removeEditTaskMember(${memberId})" class="text-gray-500 hover:text-red-500">
-                    <i class="fa fa-times"></i>
-                </button>
-            `;
-            selectedMembers.appendChild(memberBadge);
-        }
-        
-        // Refresh search results to update selection status
+        toggleMemberSelection(memberId, 'selectedEditTaskMembers', 'removeEditTaskMember', 'flex items-center gap-2 bg-gray-100 px-3 py-2 rounded-full', 'w-5 h-5');
         searchEditTaskMember();
     }
     
     // Remove edit task member
     function removeEditTaskMember(memberId) {
-        const selectedMembers = document.getElementById('selectedEditTaskMembers');
-        const badge = selectedMembers.querySelector(`[data-member-id="${memberId}"]`);
-        if (badge) badge.remove();
+        removeMember(memberId, 'selectedEditTaskMembers');
     }
     
     // Handle edit task form submission
@@ -8870,44 +8500,25 @@
     
     // Toggle Add Activity Modal
     function toggleAddActivityModal() {
-        const modal = document.getElementById('addActivityModal');
-        if (modal.classList.contains('hidden')) {
-            modal.classList.remove('hidden');
-            modal.classList.add('flex');
-            // Reset form
-            document.getElementById('addActivityForm').reset();
-            document.getElementById('selectedActivityMembers').innerHTML = '';
-            document.getElementById('activityMemberSearchResults').innerHTML = '';
-            activityImagesToUpload = [];
-            document.getElementById('activityImagesPreview').innerHTML = '';
-        } else {
-            modal.classList.add('hidden');
-            modal.classList.remove('flex');
-        }
+        toggleModal('addActivityModal', {
+            onShow: () => {
+                document.getElementById('addActivityForm').reset();
+                document.getElementById('selectedActivityMembers').innerHTML = '';
+                document.getElementById('activityMemberSearchResults').innerHTML = '';
+                activityImagesToUpload = [];
+                document.getElementById('activityImagesPreview').innerHTML = '';
+            }
+        });
     }
     
     // Toggle Edit Activity Modal
     function toggleEditActivityModal() {
-        const modal = document.getElementById('editActivityModal');
-        if (modal.classList.contains('hidden')) {
-            modal.classList.remove('hidden');
-            modal.classList.add('flex');
-        } else {
-            modal.classList.add('hidden');
-            modal.classList.remove('flex');
-        }
+        toggleModal('editActivityModal');
     }
     
     // Toggle Activity Detail Modal
     function toggleActivityDetailModal() {
-        const modal = document.getElementById('activityDetailModal');
-        if (modal.classList.contains('hidden')) {
-            modal.classList.remove('hidden');
-            modal.classList.add('flex');
-        } else {
-            modal.classList.add('hidden');
-            modal.classList.remove('flex');
-        }
+        toggleModal('activityDetailModal');
     }
     
     // Show Activity Detail from Member Detail
@@ -9138,80 +8749,30 @@
     
     // Delete Activity
     function deleteActivity() {
-        if (!confirm('确定要删除这个活动吗？此操作不可撤销。')) return;
-        
-        activities = activities.filter(a => a.id !== currentActivityId);
-        saveActivities();
-        renderActivities();
-        toggleActivityDetailModal();
-        showNotification('活动已删除', 'info');
+        activities = deleteItem(currentActivityId, activities, saveActivities, renderActivities, toggleActivityDetailModal, '活动');
     }
     
     // Search Activity Member
     function searchActivityMember() {
-        const query = document.getElementById('activityMemberSearch').value.toLowerCase().trim();
-        const resultsContainer = document.getElementById('activityMemberSearchResults');
-        const selectedMembers = document.getElementById('selectedActivityMembers');
-        const selectedIds = Array.from(selectedMembers.querySelectorAll('[data-member-id]')).map(el => parseInt(el.dataset.memberId));
-        
-        if (!query) {
-            resultsContainer.innerHTML = '';
-            return;
-        }
-        
-        const matchingMembers = familyData.filter(m => 
-            m.name.toLowerCase().includes(query) && !selectedIds.includes(m.id)
-        );
-        
-        if (matchingMembers.length === 0) {
-            resultsContainer.innerHTML = '<p class="text-sm text-gray-500 text-center py-2">未找到匹配的成员</p>';
-            return;
-        }
-        
-        resultsContainer.innerHTML = matchingMembers.map(m => `
-            <div class="flex items-center gap-2 p-2 hover:bg-gray-200 rounded-lg cursor-pointer" onclick="selectActivityMember(${m.id})">
-                <img src="${m.image}" alt="${m.name}" class="w-8 h-8 rounded-full object-cover">
-                <span class="text-sm text-gray-700">${m.name}</span>
-            </div>
-        `).join('');
+        searchMembers({
+            searchInputId: 'activityMemberSearch',
+            resultsContainerId: 'activityMemberSearchResults',
+            selectedContainerId: 'selectedActivityMembers',
+            onSelect: 'selectActivityMember',
+            showBirthDate: false,
+            showFamilyStatus: false
+        });
     }
     
     // Select Activity Member
     function selectActivityMember(memberId) {
-        const member = familyData.find(m => m.id === memberId);
-        if (!member) return;
-        
-        const selectedMembers = document.getElementById('selectedActivityMembers');
-        
-        // Check if already selected
-        const existing = selectedMembers.querySelector(`[data-member-id="${memberId}"]`);
-        if (existing) {
-            // Remove if already selected
-            existing.remove();
-        } else {
-            // Add if not selected
-            const memberTag = document.createElement('div');
-            memberTag.className = 'flex items-center gap-2 bg-pink-100 rounded-lg px-3 py-1';
-            memberTag.dataset.memberId = memberId;
-            memberTag.innerHTML = `
-                <img src="${member.image}" alt="${member.name}" class="w-6 h-6 rounded-full object-cover">
-                <span class="text-sm text-gray-700">${member.name}</span>
-                <button type="button" onclick="removeActivityMember(${memberId})" class="text-red-500 hover:text-red-700">
-                    <i class="fa fa-times"></i>
-                </button>
-            `;
-            selectedMembers.appendChild(memberTag);
-        }
-        
-        // Refresh search results to update selection status
+        toggleMemberSelection(memberId, 'selectedActivityMembers', 'removeActivityMember', 'flex items-center gap-2 bg-pink-100 rounded-lg px-3 py-1', 'w-6 h-6');
         searchActivityMember();
     }
     
     // Remove Activity Member
     function removeActivityMember(memberId) {
-        const selectedMembers = document.getElementById('selectedActivityMembers');
-        const memberTag = selectedMembers.querySelector(`[data-member-id="${memberId}"]`);
-        if (memberTag) memberTag.remove();
+        removeMember(memberId, 'selectedActivityMembers');
     }
     
     // Clear Activity Member Search
@@ -9222,69 +8783,25 @@
     
     // Search Edit Activity Member
     function searchEditActivityMember() {
-        const query = document.getElementById('editActivityMemberSearch').value.toLowerCase().trim();
-        const resultsContainer = document.getElementById('editActivityMemberSearchResults');
-        const selectedMembers = document.getElementById('selectedEditActivityMembers');
-        const selectedIds = Array.from(selectedMembers.querySelectorAll('[data-member-id]')).map(el => parseInt(el.dataset.memberId));
-        
-        if (!query) {
-            resultsContainer.innerHTML = '';
-            return;
-        }
-        
-        const matchingMembers = familyData.filter(m => 
-            m.name.toLowerCase().includes(query) && !selectedIds.includes(m.id)
-        );
-        
-        if (matchingMembers.length === 0) {
-            resultsContainer.innerHTML = '<p class="text-sm text-gray-500 text-center py-2">未找到匹配的成员</p>';
-            return;
-        }
-        
-        resultsContainer.innerHTML = matchingMembers.map(m => `
-            <div class="flex items-center gap-2 p-2 hover:bg-gray-200 rounded-lg cursor-pointer" onclick="selectEditActivityMember(${m.id})">
-                <img src="${m.image}" alt="${m.name}" class="w-8 h-8 rounded-full object-cover">
-                <span class="text-sm text-gray-700">${m.name}</span>
-            </div>
-        `).join('');
+        searchMembers({
+            searchInputId: 'editActivityMemberSearch',
+            resultsContainerId: 'editActivityMemberSearchResults',
+            selectedContainerId: 'selectedEditActivityMembers',
+            onSelect: 'selectEditActivityMember',
+            showBirthDate: false,
+            showFamilyStatus: false
+        });
     }
     
     // Select Edit Activity Member
     function selectEditActivityMember(memberId) {
-        const member = familyData.find(m => m.id === memberId);
-        if (!member) return;
-        
-        const selectedMembers = document.getElementById('selectedEditActivityMembers');
-        
-        // Check if already selected
-        const existing = selectedMembers.querySelector(`[data-member-id="${memberId}"]`);
-        if (existing) {
-            // Remove if already selected
-            existing.remove();
-        } else {
-            // Add if not selected
-            const memberTag = document.createElement('div');
-            memberTag.className = 'flex items-center gap-2 bg-pink-100 rounded-lg px-3 py-1';
-            memberTag.dataset.memberId = memberId;
-            memberTag.innerHTML = `
-                <img src="${member.image}" alt="${member.name}" class="w-6 h-6 rounded-full object-cover">
-                <span class="text-sm text-gray-700">${member.name}</span>
-                <button type="button" onclick="removeEditActivityMember(${memberId})" class="text-red-500 hover:text-red-700">
-                    <i class="fa fa-times"></i>
-                </button>
-            `;
-            selectedMembers.appendChild(memberTag);
-        }
-        
-        // Refresh search results to update selection status
+        toggleMemberSelection(memberId, 'selectedEditActivityMembers', 'removeEditActivityMember', 'flex items-center gap-2 bg-pink-100 rounded-lg px-3 py-1', 'w-6 h-6');
         searchEditActivityMember();
     }
     
     // Remove Edit Activity Member
     function removeEditActivityMember(memberId) {
-        const selectedMembers = document.getElementById('selectedEditActivityMembers');
-        const memberTag = selectedMembers.querySelector(`[data-member-id="${memberId}"]`);
-        if (memberTag) memberTag.remove();
+        removeMember(memberId, 'selectedEditActivityMembers');
     }
     
     // Clear Edit Activity Member Search
@@ -9296,107 +8813,45 @@
     // Handle Activity Image Upload
     function handleActivityImageUpload(event) {
         const files = event.target.files;
-        const preview = document.getElementById('activityImagesPreview');
         
         Array.from(files).forEach(file => {
-            if (file.size > 5 * 1024 * 1024) {
-                showNotification('图片大小不能超过5MB', 'error');
-                return;
-            }
-            
-            // 使用压缩函数处理图片
-            processImageUpload(file, (compressedImage) => {
+            ImageManager.processImageFile(file).then(compressedImage => {
                 activityImagesToUpload.push(compressedImage);
-                const imgDiv = document.createElement('div');
-                imgDiv.className = 'relative group';
-                imgDiv.innerHTML = `
-                    <img src="${compressedImage}" alt="预览" class="w-full h-24 object-cover rounded-lg">
-                    <button type="button" onclick="removeActivityImagePreview(${activityImagesToUpload.length - 1})" class="absolute top-1 right-1 bg-red-500 text-white rounded-full w-5 h-5 flex items-center justify-center hover:bg-red-600 opacity-0 group-hover:opacity-100 transition-opacity">
-                        <i class="fa fa-times text-xs"></i>
-                    </button>
-                `;
-                preview.appendChild(imgDiv);
-            });
+                ImageManager.renderPreviews(activityImagesToUpload, 'activityImagesPreview', 'removeActivityImagePreview');
+            }).catch(() => {});
         });
     }
     
     // Remove Activity Image Preview
     function removeActivityImagePreview(index) {
-        if (confirm('确定要删除这张图片吗？')) {
-            activityImagesToUpload.splice(index, 1);
-            const preview = document.getElementById('activityImagesPreview');
-            preview.innerHTML = '';
-            activityImagesToUpload.forEach((img, i) => {
-                const imgDiv = document.createElement('div');
-                imgDiv.className = 'relative group';
-                imgDiv.innerHTML = `
-                    <img src="${img}" alt="图片 ${i + 1}" class="w-full h-20 object-cover rounded-lg">
-                    <button type="button" onclick="removeActivityImagePreview(${i})" 
-                            class="absolute top-1 right-1 bg-red-500 text-white p-1 rounded-full opacity-0 group-hover:opacity-100 transition-opacity">
-                        <i class="fa fa-times text-xs"></i>
-                    </button>
-                `;
-                preview.appendChild(imgDiv);
-            });
-        }
+        removePreviewImage(activityImagesToUpload, 'activityImagesPreview', 'removeActivityImagePreview', index);
     }
     
     // Handle Edit Activity Image Upload
     function handleEditActivityImageUpload(event) {
         const files = event.target.files;
-        const preview = document.getElementById('editActivityImagesPreview');
         
         Array.from(files).forEach(file => {
-            if (file.size > 5 * 1024 * 1024) {
-                showNotification('图片大小不能超过5MB', 'error');
-                return;
-            }
-            
-            // 使用压缩函数处理图片
-            processImageUpload(file, (compressedImage) => {
+            ImageManager.processImageFile(file).then(compressedImage => {
                 editingActivityImages.push(compressedImage);
-                const imgDiv = document.createElement('div');
-                imgDiv.className = 'relative group';
-                imgDiv.innerHTML = `
-                    <img src="${compressedImage}" alt="预览" class="w-full h-24 object-cover rounded-lg">
-                    <button type="button" onclick="removeEditActivityImage(${editingActivityImages.length - 1})" class="absolute top-1 right-1 bg-red-500 text-white rounded-full w-5 h-5 flex items-center justify-center hover:bg-red-600 opacity-0 group-hover:opacity-100 transition-opacity">
-                        <i class="fa fa-times text-xs"></i>
-                    </button>
-                `;
-                preview.appendChild(imgDiv);
-            });
+                ImageManager.renderPreviews(editingActivityImages, 'editActivityImagesPreview', 'removeEditActivityImage');
+            }).catch(() => {});
         });
     }
     
     // Remove Edit Activity Image
     function removeEditActivityImage(index) {
-        if (confirm('确定要删除这张图片吗？')) {
-            editingActivityImages.splice(index, 1);
-            const preview = document.getElementById('editActivityImagesPreview');
-            preview.innerHTML = '';
-            editingActivityImages.forEach((img, i) => {
-                const imgDiv = document.createElement('div');
-                imgDiv.className = 'relative group';
-                imgDiv.innerHTML = `
-                    <img src="${img}" alt="图片 ${i + 1}" class="w-full h-20 object-cover rounded-lg">
-                    <button type="button" onclick="removeEditActivityImage(${i})" 
-                            class="absolute top-1 right-1 bg-red-500 text-white p-1 rounded-full opacity-0 group-hover:opacity-100 transition-opacity">
-                        <i class="fa fa-times text-xs"></i>
-                    </button>
-                `;
-                preview.appendChild(imgDiv);
-            });
-        }
+        removePreviewImage(editingActivityImages, 'editActivityImagesPreview', 'removeEditActivityImage', index);
     }
     
     // Handle Add Activity Form Submission
     function handleAddActivity(event) {
         event.preventDefault();
         
-        const name = document.getElementById('activityName').value.trim();
-        const description = document.getElementById('activityDescription').value.trim();
-        const startTime = document.getElementById('activityStartTime').value.trim();
-        const endTime = document.getElementById('activityEndTime').value.trim();
+        const name = Toolkit.getInputValue('activityName');
+        const description = Toolkit.getInputValue('activityDescription');
+        const startTime = Toolkit.getInputValue('activityStartTime');
+        const endTime = Toolkit.getInputValue('activityEndTime');
         
         if (!name) {
             showNotification('请输入活动名称', 'error');
